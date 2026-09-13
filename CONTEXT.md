@@ -31,3 +31,7 @@ _Avoid_: update, re-upload (that term names only the raw upload step within a re
 **Trash** / **Force delete**:
 Two distinct outcomes of `DELETE /assets`. Trash (the default, no `force`) marks the asset restorable for a server-configured retention window. Force delete skips trash and is unrecoverable. The client must never force-delete anything but an own upload it can positively identify via the local upload record.
 _Avoid_: soft delete / hard delete.
+
+**Supported server**:
+A server whose `GET /server/version` reports 3.0.0 or above — the sole, checked condition the client requires before it will watch or upload at all. A server below that (or one that fails to report a parseable version) is refused outright, at settings-save time and at every app startup. Distinct from a server the code merely happens to work against; only the checked threshold makes a server "supported."
+_Avoid_: compatible server (implies untested/incidental, not the checked threshold).
