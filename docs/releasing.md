@@ -23,7 +23,7 @@ They cover album lookup, replace (upload, copy, trash old) and live-delete-to-tr
 
 On a clean profile (or after removing `%USERPROFILE%\.Immich-desktop-client`):
 
-1. Build: `pyinstaller -n immich-desktop-client -F src/main.py`, then compile `resources/installer-script.iss`.
+1. Build: `pip install pyinstaller pystray watchdog`, then `pyinstaller immich-desktop-client.spec` (windowed, with icon), then compile `resources/installer-script.iss`.
 2. Install; start the app: the settings window opens. Enter the LAN server, an API key and a test folder.
    Saving against a server older than 3.0.0 must be refused.
 3. Restart the app: tray icon appears, a second launch does nothing, existing files upload into the album.
