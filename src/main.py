@@ -1,6 +1,8 @@
 import mimetypes
 import os
 import sys
+import threading
+from contextlib import contextmanager
 from time import sleep
 from pathlib import Path
 
@@ -10,9 +12,12 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import autostart
+from gui_runner import GuiRunner
 from single_instance import acquire
-from config import default_config_dir, load_config, write_template_config
-from immich import Immich, ServerUnreachableError, UnsupportedServerError, is_media_file
+from config import (default_config_dir, existing_directories, is_placeholder_config, load_config,
+                    write_template_config)
+from immich import (Immich, InvalidServerResponseError, ServerUnreachableError, UnsupportedServerError,
+                    is_media_file)
 
 
 def on_clicked(icon, item):
@@ -83,15 +88,16 @@ if instance_lock is None:
 
 # Load Config
 config = load_config(default_config_dir())
-if config is None:
-    # first run: ask for the settings in a window; without a display fall back to the config template
+if config is None or is_placeholder_config(config):
+    # first run (or the untouched example config): ask for the settings in a window
+    config = None
     try:
         from settings_dialog import open_settings
         if open_settings():
             config = load_config(default_config_dir())
-    except ImportError:
-        pass
-    if config is None:
+    except Exception as e:  # no tkinter, or no display (headless session)
+        print(f"could not show the settings window: {e!r}")
+    if config is None or is_placeholder_config(config):
         sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
                  f"or start the app again to open the settings window.")
 
@@ -121,20 +127,26 @@ for attempt in range(1, STARTUP_ATTEMPTS + 1):
         break
     except UnsupportedServerError as e:
         sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+    except InvalidServerResponseError as e:
+        sys.exit(f"Refusing to start: {e}")
     except ServerUnreachableError as e:
         if attempt == STARTUP_ATTEMPTS:
             sys.exit(f"Could not reach the Immich server: {e}")
         print(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
         sleep(30)
-api.test_connection()
+if api.test_connection() in (401, 403):
+    sys.exit("The Immich server rejected the API key. Open the settings and check it.")
 api.upload_all_images(directories_to_watch, media_file_extensions)
 
 # Create observer and event handler
 observer = Observer()
 event_handler = MyHandler()
-for directory in directories_to_watch:
-    observer.schedule(event_handler, directory, recursive=recursive)
-    print("watching directory: " + directory)
+for directory in existing_directories(directories_to_watch):
+    try:
+        observer.schedule(event_handler, directory, recursive=recursive)
+        print("watching directory: " + directory)
+    except OSError as e:
+        print(f"could not watch {directory}: {e!r}")
 observer.start()
 
 def load_icon():
@@ -142,6 +154,22 @@ def load_icon():
         return Image.open(default_config_dir() / 'icon.ico')
     except OSError:
         return Image.new('RGB', (64, 64), (66, 80, 175))  # plain fallback when the icon file is missing
+
+
+# Tk windows only ever run on the main thread (see GuiRunner); tray callbacks just submit tasks.
+runner = GuiRunner(inline=sys.platform == "darwin")  # macOS: the tray owns the main thread
+
+
+@contextmanager
+def hidden_root():
+    import tkinter
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    try:
+        yield root
+    finally:
+        root.destroy()
 
 
 def open_config(tray_icon, tray_item):
@@ -153,26 +181,36 @@ def open_config(tray_icon, tray_item):
 
 
 def open_settings_window(tray_icon, tray_item):
-    from settings_dialog import open_settings
-    open_settings()
+    def show():
+        from settings_dialog import open_settings
+        open_settings()
+
+    runner.submit_once("settings", show)
 
 
 def delete_all_uploads(tray_icon, tray_item):
-    import tkinter
-    from tkinter import messagebox
-    root = tkinter.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    confirmed = messagebox.askyesno(
-        "Immich Desktop Client",
-        "Move every file this app uploaded to the Immich trash?\n\n"
-        "Files that already existed on the server are not touched. "
-        "Trashed items can be restored in Immich until its trash is emptied.",
-        parent=root)
-    if confirmed:
+    def show_result(trashed):
+        from tkinter import messagebox
+        with hidden_root() as root:
+            messagebox.showinfo("Immich Desktop Client", f"Moved {trashed} uploads to the Immich trash.", parent=root)
+
+    def work():  # network loop: off the GUI thread so windows and the tray stay responsive
         trashed = api.delete_all_own_uploads()
-        messagebox.showinfo("Immich Desktop Client", f"Moved {trashed} uploads to the Immich trash.", parent=root)
-    root.destroy()
+        runner.submit(lambda: show_result(trashed))
+
+    def confirm():
+        from tkinter import messagebox
+        with hidden_root() as root:
+            confirmed = messagebox.askyesno(
+                "Immich Desktop Client",
+                "Move every file this app uploaded to the Immich trash?\n\n"
+                "Files that already existed on the server are not touched. "
+                "Trashed items can be restored in Immich until its trash is emptied.",
+                parent=root)
+        if confirmed:
+            threading.Thread(target=work, daemon=True).start()
+
+    runner.submit_once("delete-all", confirm)
 
 
 def toggle_autostart(tray_icon, tray_item):
@@ -185,11 +223,12 @@ def toggle_autostart(tray_icon, tray_item):
 def quit_app(tray_icon, tray_item):
     observer.stop()
     tray_icon.stop()
+    runner.stop()
 
 
 # Update the state in `on_clicked` and return the new state in
 # a `checked` callable
-icon('Immich Desktop Client', load_icon(), menu=menu(
+tray = icon('Immich Desktop Client', load_icon(), menu=menu(
     item(
         'Sync directories to Immich',
         on_clicked,
@@ -200,5 +239,10 @@ icon('Immich Desktop Client', load_icon(), menu=menu(
     item('Open config file', open_config),
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
-)).run()
+))
+if sys.platform == "darwin":
+    tray.run()
+else:
+    tray.run_detached()
+    runner.run()  # blocks the main thread, executing GUI tasks, until Quit
 instance_lock.release()
