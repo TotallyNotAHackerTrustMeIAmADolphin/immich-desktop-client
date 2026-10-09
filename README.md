@@ -35,7 +35,8 @@ desktop to your Immich server.
 
 #### Windows
 
-1. Install with the Installer executable
+1. Install with the Installer executable. The installer is not code-signed yet, so Windows SmartScreen shows
+   "Windows protected your PC" on first run: choose *More info*, then *Run anyway*.
 2. modify the config file in the .immich-desktop-client folder in your home directory
 3. enjoy
 
@@ -95,8 +96,9 @@ watchdog:
 
 ## Build it yourself
 
-1. run ``pyinstaller -n immich-dsektop-client -F src/main.py``
-2. run ``resources\installer-script.iss`` with Inno Setup
+1. ``pip install -r requirements.txt``
+2. run ``pyinstaller immich-desktop-client.spec``
+3. run ``resources\installer-script.iss`` with Inno Setup (the version comes from the ``VERSION`` file)
 
 See [docs/releasing.md](docs/releasing.md) for the tests and checks that gate a release.
 

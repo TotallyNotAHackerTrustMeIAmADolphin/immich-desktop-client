@@ -1,0 +1,62 @@
+name: Build release (draft)
+
+# Manual on purpose: the integration and smoke tests in docs/releasing.md are gates a human has to pass first.
+# This builds the exe and installer for the version in VERSION and attaches them to a DRAFT release;
+# publishing the draft is the last manual step.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Release v${{ steps.version.outputs.version }} already exists; bump VERSION first." >&2
+            exit 1
+          fi
+
+      - name: Build executable
+        run: pyinstaller immich-desktop-client.spec --noconfirm
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" resources\installer-script.iss'
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            dist/immich-desktop-client.exe \
+            dist/immich-desktop-client-installer.exe \
+            --draft --title "v${{ steps.version.outputs.version }}" --generate-notes
