@@ -146,10 +146,11 @@ class Immich:
     # ---- file events ----------------------------------------------------------------------------------------
 
     def created(self, file):
-        self.__upload(file)
+        self.__upload(os.path.normpath(file))
 
     def modify(self, file):
         """Replace the server copy of a locally modified file (acts on a checksum change only)."""
+        file = os.path.normpath(file)  # watchdog reports "C:/dir\x.png" when the watched dir is written with "/"
         entry = self.record.get(file)
         if entry is None:
             self.created(file)
@@ -169,6 +170,7 @@ class Immich:
 
     def delete(self, file):
         """Live delete: a watched file disappeared while the app was running."""
+        file = os.path.normpath(file)
         entry = self.record.get(file)
         if entry is None:
             return
@@ -177,6 +179,7 @@ class Immich:
         self.record.remove(file)
 
     def move(self, source, destination):
+        source, destination = os.path.normpath(source), os.path.normpath(destination)
         entry = self.record.get(source)
         if entry is None:
             return
