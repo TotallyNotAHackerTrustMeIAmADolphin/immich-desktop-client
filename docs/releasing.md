@@ -39,6 +39,14 @@ rename / delete with live delete, album reuse across restarts, and the shelve up
 (the single-instance port is machine-wide). Still manual: the installer, the tray menu and the Tk dialogs
 (*Start with Windows*, *Settings...*, the bulk-trash confirmation, *Quit*).
 
+## Cutting a release
+
+1. Pass the three gates above.
+2. Bump `VERSION` (one place; the installer reads it) and merge.
+3. Run the *Build release (draft)* workflow from the Actions tab. It runs the unit tests, builds the exe and installer
+   and attaches them to a **draft** release `v<VERSION>`; it refuses to run if that release already exists.
+4. Check the draft, then publish it.
+
 ## Still undecided (see issue #1)
 
-Version numbering, whether to keep a VERSION-driven release workflow, and code signing / SmartScreen.
+Code signing / SmartScreen: releases are unsigned for now and the README says how to get past the warning.

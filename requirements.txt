@@ -1,0 +1,6 @@
+requests
+pyyaml
+pillow
+pystray
+watchdog
+pyinstaller

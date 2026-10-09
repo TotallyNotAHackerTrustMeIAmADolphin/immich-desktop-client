@@ -2,7 +2,10 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Immich Desktop Client"
-#define MyAppVersion "2024.12.23"
+; the version comes from the VERSION file at the repo root, the single place to bump it
+#define VersionFile FileOpen(SourcePath + "..\VERSION")
+#define MyAppVersion FileRead(VersionFile)
+#expr FileClose(VersionFile)
 #define MyAppPublisher "Maximilian Dorninger"
 #define MyAppURL "https://github.com/CookieDude24/immich-desktop-client"
 #define MyAppExeName "immich-desktop-client.exe"
