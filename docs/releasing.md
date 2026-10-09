@@ -1,0 +1,37 @@
+# Releasing
+
+A release needs all three gates below. CI only runs the unit tests; the other two are manual.
+
+## 1. Unit tests (automatic)
+
+`pip install -r requirements-dev.txt && python -m pytest`
+
+## 2. Integration tests against a disposable Immich 3.1 (manual, local)
+
+Never use your real library: these tests upload, replace and trash assets.
+
+1. Start a throw-away server from the official compose file of the release you target, e.g.
+   `https://github.com/immich-app/immich/releases/download/v3.1.0/docker-compose.yml` (plus its example `.env`),
+   with `docker compose up -d`. Wait for `http://localhost:2283/api/server/version`.
+2. `IMMICH_TEST_URL=http://localhost:2283/api python -m pytest tests/integration`
+   (the first run signs up an admin and creates an API key itself; set `IMMICH_TEST_API_KEY` to reuse one).
+3. `docker compose down -v` to throw everything away.
+
+They cover album lookup, replace (upload, copy, trash old) and live-delete-to-trash being restorable.
+
+## 3. Manual smoke test on Windows 11 (manual)
+
+On a clean profile (or after removing `%USERPROFILE%\.Immich-desktop-client`):
+
+1. Build: `pyinstaller -n immich-desktop-client -F src/main.py`, then compile `resources/installer-script.iss`.
+2. Install; start the app: the settings window opens. Enter the LAN server, an API key and a test folder.
+   Saving against a server older than 3.0.0 must be refused.
+3. Restart the app: tray icon appears, a second launch does nothing, existing files upload into the album.
+4. Add a photo, edit it, rename it, delete it (with *live delete* on): check Immich after each step.
+5. Tray: *Start with Windows* toggles, *Settings...* opens, *Move all uploads to Immich trash...* asks first, *Quit* exits.
+6. Upgrade path: install over an old version that has a `shelve` file; its entries must appear as non-own uploads
+   (never deleted or replaced), and an old `config.yaml` directory must be moved aside, not crash the app.
+
+## Still undecided (see issue #1)
+
+Version numbering, whether to keep a VERSION-driven release workflow, and code signing / SmartScreen.
