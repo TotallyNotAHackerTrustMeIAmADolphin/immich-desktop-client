@@ -88,3 +88,14 @@ def test_catch_up_never_touches_record_of_files_missing_from_disk(client, api, t
     client.upload_all_images([str(tmp_path)], (".jpg",))
 
     assert client.record.get(str(gone)) is not None
+
+
+def test_reupload_resolving_to_the_same_asset_keeps_own_upload_status(client, api, tmp_path):
+    photo = make_photo(tmp_path)
+    client.created(str(photo))
+    api.next_status = "duplicate"
+    api.fixed_id = "asset-1"
+
+    client.created(str(photo))  # e.g. a modified event racing the created event
+
+    assert client.record.get(str(photo)).own_upload is True

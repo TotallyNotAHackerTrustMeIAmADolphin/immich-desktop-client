@@ -65,8 +65,8 @@ class Immich:
             if entry.root is None:
                 self.record.set_root(entry.path, root)
             # files missing from disk are deliberately left alone here (catch-up delete is a separate feature)
-            if os.path.isfile(entry.path) and self.__get_sha1(entry.path) != entry.checksum:
-                self.created(entry.path)
+            if os.path.isfile(entry.path):
+                self.modify(entry.path)
 
         print("uploading new files")
         for root in self.__roots:
@@ -79,11 +79,33 @@ class Immich:
                     self.created(file)
 
     def created(self, file):
+        self.__upload(file)
+
+    def modify(self, file):
+        """Replace the server copy of a locally modified file (acts on a checksum change only)."""
+        entry = self.record.get(file)
+        if entry is None:
+            self.created(file)
+            return
+        if self.__get_sha1(file) == entry.checksum:
+            return
+
+        uploaded = self.__upload(file)
+        if uploaded is None:
+            return  # the old asset and its record entry are untouched
+        new_id, status = uploaded
+        if not entry.own_upload or status != 'created' or new_id == entry.asset_id:
+            return  # never copy over or trash an asset this client did not create itself
+        self.__copy_asset_metadata(entry.asset_id, new_id)
+        self.__trash([entry.asset_id])
+
+    def __upload(self, file):
+        """Upload a file and record it. Returns (asset_id, status), or None if the upload failed."""
         try:
             stats = self.__get_file_stats(file)
         except FileNotFoundError:
             print("could not create file")
-            return
+            return None
 
         checksum = self.__get_sha1(file)
         headers = {
@@ -106,84 +128,25 @@ class Immich:
             response = requests.post(self.__immichHost + "/assets", headers=headers, data=data, files=files)
         except Exception as e:
             print(e)
+            return None
         else:
             if not response.ok:
                 print(f"upload of {file} failed: {response.status_code} {response.text}")
-                return
+                return None
             image_id = json.loads(response.text)
             print("status: " + image_id['status'])
-            self.record.upsert(file, image_id['id'], checksum, own_upload=image_id['status'] == 'created',
+            previous = self.record.get(file)
+            own_upload = image_id['status'] == 'created' or (
+                previous is not None and previous.own_upload and previous.asset_id == image_id['id'])
+            self.record.upsert(file, image_id['id'], checksum, own_upload=own_upload,
                                root=self.__root_for(file))
             self.__add_asset_to_album(image_id['id'])
             print("saved image successfully: " + str(response.text))
-
-    # TODO: Create option to replace assets instead of adding the new version
-    #    def modify(self, file):
-    #                try:
-    #                    stats = self.__get_file_stats(file)
-    #                except FileNotFoundError:
-    #                    print("could not create file")
-    #                    return
-    #        try:
-    #            asset_id = self.__get_image_id(file)
-    #        except KeyError:
-    #            print("trying to modify non-uploaded file ... uploading file")
-    #            self.created(file)
-    #        else:
-    #            print(file)
-    #            data = {
-    #                'deviceAssetId': f"{file}-{stats.st_mtime}",
-    #                'deviceId': self.__uuid,
-    #                'fileCreatedAt': datetime.fromtimestamp(stats.st_mtime),
-    #                'fileModifiedAt': datetime.fromtimestamp(stats.st_mtime)
-    #            }
-    #            files=[
-    #                ('assetData',('IMAGE',open(file,'rb'),'application/octet-stream'))
-    #            ]
-    #            headers = {
-    #                'Accept': 'application/json',
-    #                'x-api-key': self.__apiKey
-    #            }
-    #            try:
-    #                print(f"{self.__immichHost}/assets/{asset_id}/original")
-    #                response = requests.request(method="PUT", url=f"{self.__immichHost}/assets/{asset_id}/original", headers=headers,
-    #                                            files=files, data=data)
-    #            except Exception as e:
-    #                print("error when replacing file" + e.__str__())
-    #            else:
-    #                if response.status_code == 200:
-    #                    self.__save_image_to_shelve(asset_id, file)
-    #                else:
-    #                    print("error when replacing file")
-    #                print(response.text)
+            return image_id['id'], image_id['status']
 
     def delete(self, file):
         self.record.remove(file)
 
-    # TODO create Option for deleting images on server too
-    #    try:
-    #        assetId = self.__getImageId(file)
-    #    except KeyError:
-    #        print("deleting non-uploaded file")
-    #    else:
-    #        payload = json.dumps({
-    #            "force": True,
-    #            "ids": [
-    #                assetId
-    #            ]
-    #        })
-    #        headers = {
-    #            'Content-Type': 'application/json',
-    #            'x-api-key': self.__apiKey
-    #        }
-    #        try:
-    #            response = requests.request("DELETE", self.__immichHost + "/assets", headers=headers, data=payload)
-    #        except Exception as e:
-    #            print("error when deleting file: "+ e.__str__())
-    #            return
-    #        else:
-    #            print(response.text)
-    #            self.__delete_image_from_shelve(file)
     def move(self, source, destination):
         entry = self.record.get(source)
         if entry is None:
@@ -191,6 +154,27 @@ class Immich:
         self.record.remove(source)
         self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload,
                            root=self.__root_for(destination) or entry.root)
+
+    def __copy_asset_metadata(self, source_id, target_id):
+        headers = {'Content-Type': 'application/json', 'x-api-key': self.__apiKey}
+        payload = json.dumps({"sourceId": source_id, "targetId": target_id})
+        try:
+            response = requests.request("PUT", self.__immichHost + "/assets/copy", headers=headers, data=payload)
+            if not response.ok:
+                print(f"could not carry albums/favorite over to the new asset: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"could not carry albums/favorite over to the new asset: {e}")
+
+    def __trash(self, asset_ids):
+        """Move assets to the server's trash. Deliberately never sends force (see ADR 0001)."""
+        headers = {'Content-Type': 'application/json', 'x-api-key': self.__apiKey}
+        payload = json.dumps({"ids": list(asset_ids)})
+        try:
+            response = requests.request("DELETE", self.__immichHost + "/assets", headers=headers, data=payload)
+            if not response.ok:
+                print(f"could not trash {asset_ids}: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"could not trash {asset_ids}: {e}")
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""

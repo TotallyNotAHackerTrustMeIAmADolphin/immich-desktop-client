@@ -1,5 +1,6 @@
 import mimetypes
 import sys
+from time import sleep
 from pathlib import Path
 
 from PIL import Image
@@ -62,7 +63,15 @@ class MyHandler(FileSystemEventHandler):
             except Exception as e:
                 print(f"error handling move of {event.src_path}: {e!r}")
 
-    # TODO: modified files are handled by replace (see issue #18)
+    def on_modified(self, event):
+        global state
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
+            sleep(1)  # let the writer finish before hashing
+            print(f"File {event.src_path} has been modified!")
+            try:
+                api.modify(event.src_path)
+            except Exception as e:
+                print(f"error handling modification of {event.src_path}: {e!r}")
 
 
 # Load Config

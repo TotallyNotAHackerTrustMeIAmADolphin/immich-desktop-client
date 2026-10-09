@@ -20,9 +20,12 @@ class FakeImmichApi:
         self.uploads = []  # form data of every POST /assets
         self.album_adds = []  # asset ids added to albums
         self.next_status = "created"
+        self.fixed_id = None  # force every upload to resolve to this asset id
         self.upload_error = None  # (status_code, body) to simulate a failed upload
         self.version = {"major": 3, "minor": 1, "patch": 0}  # served by GET /server/version
         self.unreachable = False
+        self.copies = []  # PUT /assets/copy payloads
+        self.deletes = []  # DELETE /assets payloads
         self.albums = []  # served by GET /albums
         self.created_albums = []
         self._counter = 0
@@ -33,7 +36,8 @@ class FakeImmichApi:
             return FakeResponse(self.upload_error[1], self.upload_error[0])
         self.uploads.append(dict(data))
         self._counter += 1
-        return FakeResponse({"id": f"asset-{self._counter}", "status": self.next_status}, 201)
+        asset_id = self.fixed_id or f"asset-{self._counter}"
+        return FakeResponse({"id": asset_id, "status": self.next_status}, 201)
 
     def request(self, method, url, headers=None, data=None, **kwargs):
         if method == "PUT" and "/albums/" in url and url.endswith("/assets"):
@@ -41,6 +45,12 @@ class FakeImmichApi:
             return FakeResponse([{"success": True}])
         if self.unreachable:
             raise requests.exceptions.ConnectionError("server down")
+        if method == "PUT" and url.endswith("/assets/copy"):
+            self.copies.append(json.loads(data))
+            return FakeResponse({}, 204)
+        if method == "DELETE" and url.endswith("/assets"):
+            self.deletes.append(json.loads(data))
+            return FakeResponse({}, 204)
         if method == "GET" and url.endswith("/server/version"):
             return FakeResponse(self.version)
         if method == "GET" and url.endswith("/albums"):
