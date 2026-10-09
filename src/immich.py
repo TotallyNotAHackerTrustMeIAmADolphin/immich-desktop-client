@@ -28,11 +28,12 @@ def is_media_file(path, media_file_extensions):
 
 
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None, live_delete=False):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None, live_delete=False, catch_up_delete=False):
         self.__immichHost = immich_host
         self.__apiKey = api_key
         self.__roots = []
         self.__live_delete = live_delete
+        self.__catch_up_delete = catch_up_delete
 
         if record_path is None:
             data_dir = Path.home() / ".Immich-desktop-client"
@@ -65,9 +66,10 @@ class Immich:
                 continue  # root currently unreachable (unmounted drive, offline share): skip, never delete
             if entry.root is None:
                 self.record.set_root(entry.path, root)
-            # files missing from disk are deliberately left alone here (catch-up delete is a separate feature)
             if os.path.isfile(entry.path):
                 self.modify(entry.path)
+            elif self.__catch_up_delete:
+                self.__forget_missing(entry)
 
         print("uploading new files")
         for root in self.__roots:
@@ -144,6 +146,12 @@ class Immich:
             self.__add_asset_to_album(image_id['id'])
             print("saved image successfully: " + str(response.text))
             return image_id['id'], image_id['status']
+
+    def __forget_missing(self, entry):
+        """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""
+        if entry.own_upload and not self.__trash([entry.asset_id]):
+            return  # keep the entry so the next startup retries
+        self.record.remove(entry.path)
 
     def delete(self, file):
         """Live delete: a watched file disappeared while the app was running."""

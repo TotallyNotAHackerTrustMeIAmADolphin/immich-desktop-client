@@ -13,6 +13,10 @@ watchdog:
   directories:
     - C:\\Users\\test\\Images\\
     - C:\\Users\\test\\Screenshots\\
+# Optional. Deletions only ever move this client's own uploads to the server's trash.
+delete:
+  live: false      # trash the upload when the local file is deleted while the app runs
+  catch_up: false  # at startup, trash uploads whose local file is gone (reachable folders only)
 """
 
 

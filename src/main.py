@@ -90,7 +90,8 @@ delete_options = config.get("delete") or {}
 state = True
 
 try:
-    api = Immich(immich_host, api_key, album_name, live_delete=delete_options.get("live", False))
+    api = Immich(immich_host, api_key, album_name, live_delete=delete_options.get("live", False),
+                catch_up_delete=delete_options.get("catch_up", False))
 except UnsupportedServerError as e:
     sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
 except ServerUnreachableError as e:
