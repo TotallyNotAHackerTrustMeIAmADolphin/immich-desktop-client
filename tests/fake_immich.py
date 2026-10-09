@@ -18,8 +18,11 @@ class FakeResponse:
 class FakeImmichApi:
     def __init__(self):
         self.uploads = []  # form data of every POST /assets
+        self.album_targets = []  # album id of every add-to-album call
         self.album_adds = []  # asset ids added to albums
         self.next_status = "created"
+        self.fail_next = []  # queue of 'raise' / 503 outcomes consumed by upcoming calls
+        self.calls = 0
         self.fixed_id = None  # force every upload to resolve to this asset id
         self.upload_error = None  # (status_code, body) to simulate a failed upload
         self.version = {"major": 3, "minor": 1, "patch": 0}  # served by GET /server/version
@@ -31,8 +34,20 @@ class FakeImmichApi:
         self.created_albums = []
         self._counter = 0
 
+    def __injected_failure(self):
+        self.calls += 1
+        if self.fail_next:
+            outcome = self.fail_next.pop(0)
+            if outcome == "raise":
+                raise requests.exceptions.ConnectionError("flaky network")
+            return FakeResponse({"message": "unavailable"}, outcome)
+        return None
+
     def post(self, url, headers=None, data=None, files=None, **kwargs):
         assert url.endswith("/assets")
+        failure = self.__injected_failure()
+        if failure is not None:
+            return failure
         if self.upload_error:
             return FakeResponse(self.upload_error[1], self.upload_error[0])
         self.uploads.append(dict(data))
@@ -41,7 +56,11 @@ class FakeImmichApi:
         return FakeResponse({"id": asset_id, "status": self.next_status}, 201)
 
     def request(self, method, url, headers=None, data=None, **kwargs):
+        failure = self.__injected_failure()
+        if failure is not None:
+            return failure
         if method == "PUT" and "/albums/" in url and url.endswith("/assets"):
+            self.album_targets.append(url.split("/albums/")[1].split("/")[0])
             self.album_adds.extend(json.loads(data)["ids"])
             return FakeResponse([{"success": True}])
         if self.unreachable:

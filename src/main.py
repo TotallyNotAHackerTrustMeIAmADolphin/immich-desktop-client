@@ -82,20 +82,34 @@ if config is None:
 media_file_extensions = get_extensions_for_type()
 
 immich_host = config["api"]["url"]
-album_name = config["api"]["album"]
+album_name = config["api"].get("album")
+if album_name is not None and str(album_name).startswith("<"):
+    album_name = None  # still the template placeholder
 api_key = config["api"]["key"]
 directories_to_watch = config["watchdog"]["directories"]
 delete_options = config.get("delete") or {}
 
 state = True
 
-try:
-    api = Immich(immich_host, api_key, album_name, live_delete=delete_options.get("live", False),
-                catch_up_delete=delete_options.get("catch_up", False))
-except UnsupportedServerError as e:
-    sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
-except ServerUnreachableError as e:
-    sys.exit(f"Could not reach the Immich server: {e}")
+recursive = config["watchdog"].get("recursive", True)
+
+# at login the network is often not up yet, so keep trying for a while before giving up
+STARTUP_ATTEMPTS = 20
+for attempt in range(1, STARTUP_ATTEMPTS + 1):
+    try:
+        api = Immich(immich_host, api_key, album_name,
+                     live_delete=delete_options.get("live", False),
+                     catch_up_delete=delete_options.get("catch_up", False),
+                     recursive=recursive,
+                     album_by_year=config["api"].get("album_by_year", False))
+        break
+    except UnsupportedServerError as e:
+        sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+    except ServerUnreachableError as e:
+        if attempt == STARTUP_ATTEMPTS:
+            sys.exit(f"Could not reach the Immich server: {e}")
+        print(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
+        sleep(30)
 api.test_connection()
 api.upload_all_images(directories_to_watch, media_file_extensions)
 
@@ -103,7 +117,7 @@ api.upload_all_images(directories_to_watch, media_file_extensions)
 observer = Observer()
 event_handler = MyHandler()
 for directory in directories_to_watch:
-    observer.schedule(event_handler, directory, recursive=True)
+    observer.schedule(event_handler, directory, recursive=recursive)
     print("watching directory: " + directory)
 observer.start()
 

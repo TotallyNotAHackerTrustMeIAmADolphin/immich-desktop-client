@@ -9,7 +9,9 @@ api:
   key: <API-KEY>
   url: https://<IMMICH_SERVER_DOMAIN>/api
   album: <OPTIONAL; OVERRIDE THE DEFAULT ALBUM NAME>
+  album_by_year: false  # file uploads into "<album> <year>" albums instead of one album
 watchdog:
+  recursive: true  # also watch sub-folders
   directories:
     - C:\\Users\\test\\Images\\
     - C:\\Users\\test\\Screenshots\\

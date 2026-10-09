@@ -9,6 +9,7 @@ def api(monkeypatch):
     fake = FakeImmichApi()
     monkeypatch.setattr(immich.requests, "post", fake.post)
     monkeypatch.setattr(immich.requests, "request", fake.request)
+    monkeypatch.setattr(immich, "sleep", lambda seconds: None)  # no real backoff waits in tests
     return fake
 
 

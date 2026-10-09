@@ -10,9 +10,10 @@ import requests
 
 from record import UploadRecord, migrate_legacy_shelve
 
-
 MINIMUM_SERVER_VERSION = (3, 0, 0)
 OWNERSHIP_HINT_KEY = "immich-desktop-client"
+RETRY_ATTEMPTS = 4
+RETRY_BASE_DELAY_SECONDS = 1
 
 
 class UnsupportedServerError(Exception):
@@ -28,12 +29,16 @@ def is_media_file(path, media_file_extensions):
 
 
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None, live_delete=False, catch_up_delete=False):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None,
+                 live_delete=False, catch_up_delete=False, recursive=True, album_by_year=False):
         self.__immichHost = immich_host
         self.__apiKey = api_key
         self.__roots = []
         self.__live_delete = live_delete
         self.__catch_up_delete = catch_up_delete
+        self.__recursive = recursive
+        self.__album_by_year = album_by_year
+        self.__album_ids = {}
 
         if record_path is None:
             data_dir = Path.home() / ".Immich-desktop-client"
@@ -44,15 +49,13 @@ class Immich:
 
         self.check_server_supported()
 
-        if album_name is None:
-            self.album_name = socket.gethostname()
-        else:
-            self.album_name = album_name
+        self.album_name = socket.gethostname() if album_name is None else album_name
+        if album_id is not None:
+            self.__album_ids[self.album_name] = album_id
+        elif not album_by_year:
+            self.__album_id_for(self.album_name)
 
-        if album_id is None:
-            self.__album_id = self.__get_album_id()
-        else:
-            self.__album_id = album_id
+    # ---- scanning -------------------------------------------------------------------------------------------
 
     def upload_all_images(self, directories, media_file_extensions):
         self.__roots = [os.path.normpath(directory) for directory in directories]
@@ -76,10 +79,22 @@ class Immich:
             if not os.path.isdir(root):
                 print(f"skipping unreachable watched root {root}")
                 continue
-            for filename in os.listdir(root):
-                file = os.path.join(root, filename)
-                if is_media_file(filename, media_file_extensions) and self.record.get(file) is None:
+            for file in self.__media_files(root, media_file_extensions):
+                if self.record.get(file) is None:
                     self.created(file)
+
+    def __media_files(self, root, media_file_extensions):
+        if self.__recursive:
+            for folder, _, filenames in os.walk(root):
+                for filename in sorted(filenames):
+                    if is_media_file(filename, media_file_extensions):
+                        yield os.path.join(folder, filename)
+        else:
+            for filename in sorted(os.listdir(root)):
+                if is_media_file(filename, media_file_extensions):
+                    yield os.path.join(root, filename)
+
+    # ---- file events ----------------------------------------------------------------------------------------
 
     def created(self, file):
         self.__upload(file)
@@ -102,57 +117,6 @@ class Immich:
         self.__copy_asset_metadata(entry.asset_id, new_id)
         self.__trash([entry.asset_id])
 
-    def __upload(self, file):
-        """Upload a file and record it. Returns (asset_id, status), or None if the upload failed."""
-        try:
-            stats = self.__get_file_stats(file)
-        except FileNotFoundError:
-            print("could not create file")
-            return None
-
-        checksum = self.__get_sha1(file)
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey,
-            'x-Immich-checksum': checksum
-        }
-
-        data = {
-            'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
-            'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
-            'isFavorite': 'false',
-            'metadata': json.dumps([{'key': OWNERSHIP_HINT_KEY, 'value': {'checksum': checksum}}]),
-        }
-
-        files = {
-            'assetData': open(file, 'rb')
-        }
-        try:
-            response = requests.post(self.__immichHost + "/assets", headers=headers, data=data, files=files)
-        except Exception as e:
-            print(e)
-            return None
-        else:
-            if not response.ok:
-                print(f"upload of {file} failed: {response.status_code} {response.text}")
-                return None
-            image_id = json.loads(response.text)
-            print("status: " + image_id['status'])
-            previous = self.record.get(file)
-            own_upload = image_id['status'] == 'created' or (
-                previous is not None and previous.own_upload and previous.asset_id == image_id['id'])
-            self.record.upsert(file, image_id['id'], checksum, own_upload=own_upload,
-                               root=self.__root_for(file))
-            self.__add_asset_to_album(image_id['id'])
-            print("saved image successfully: " + str(response.text))
-            return image_id['id'], image_id['status']
-
-    def __forget_missing(self, entry):
-        """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""
-        if entry.own_upload and not self.__trash([entry.asset_id]):
-            return  # keep the entry so the next startup retries
-        self.record.remove(entry.path)
-
     def delete(self, file):
         """Live delete: a watched file disappeared while the app was running."""
         entry = self.record.get(file)
@@ -170,84 +134,175 @@ class Immich:
         self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload,
                            root=self.__root_for(destination) or entry.root)
 
-    def __copy_asset_metadata(self, source_id, target_id):
-        headers = {'Content-Type': 'application/json', 'x-api-key': self.__apiKey}
-        payload = json.dumps({"sourceId": source_id, "targetId": target_id})
+    def __forget_missing(self, entry):
+        """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""
+        if entry.own_upload and not self.__trash([entry.asset_id]):
+            return  # keep the entry so the next startup retries
+        self.record.remove(entry.path)
+
+    # ---- server calls ---------------------------------------------------------------------------------------
+
+    def __upload(self, file):
+        """Upload a file and record it. Returns (asset_id, status), or None if the upload failed."""
         try:
-            response = requests.request("PUT", self.__immichHost + "/assets/copy", headers=headers, data=payload)
-            if not response.ok:
-                print(f"could not carry albums/favorite over to the new asset: {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            print(f"could not carry albums/favorite over to the new asset: {e}")
+            stats = self.__get_file_stats(file)
+        except FileNotFoundError:
+            print("could not create file")
+            return None
+
+        checksum = self.__get_sha1(file)
+        if checksum is None:
+            return None
+        headers = {
+            'Accept': 'application/json',
+            'x-api-key': self.__apiKey,
+            'x-Immich-checksum': checksum
+        }
+        data = {
+            'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
+            'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
+            'isFavorite': 'false',
+            'metadata': json.dumps([{'key': OWNERSHIP_HINT_KEY, 'value': {'checksum': checksum}}]),
+        }
+
+        def post():
+            with open(file, 'rb') as asset_data:
+                return requests.post(self.__immichHost + "/assets", headers=headers, data=data,
+                                     files={'assetData': asset_data})
+
+        try:
+            response = self.__with_retries(post)
+        except (requests.exceptions.RequestException, OSError) as e:
+            print(f"upload of {file} failed: {e}")
+            return None
+        if not response.ok:
+            print(f"upload of {file} failed: {response.status_code} {response.text}")
+            return None
+
+        uploaded = json.loads(response.text)
+        asset_id, status = uploaded['id'], uploaded['status']
+        print("status: " + status)
+        previous = self.record.get(file)
+        own_upload = status == 'created' or (
+            previous is not None and previous.own_upload and previous.asset_id == asset_id)
+        self.record.upsert(file, asset_id, checksum, own_upload=own_upload, root=self.__root_for(file))
+        self.__add_asset_to_album(asset_id, self.__album_name_for(stats.st_mtime))
+        return asset_id, status
+
+    def __copy_asset_metadata(self, source_id, target_id):
+        payload = json.dumps({"sourceId": source_id, "targetId": target_id})
+        response = self.__request("PUT", "/assets/copy", data=payload, json_body=True)
+        if response is None or not response.ok:
+            print("could not carry albums/favorite over to the new asset")
 
     def __trash(self, asset_ids):
         """Move assets to the server's trash; True on success. Deliberately never sends force (see ADR 0001)."""
-        headers = {'Content-Type': 'application/json', 'x-api-key': self.__apiKey}
-        payload = json.dumps({"ids": list(asset_ids)})
-        try:
-            response = requests.request("DELETE", self.__immichHost + "/assets", headers=headers, data=payload)
-            if not response.ok:
-                print(f"could not trash {asset_ids}: {response.status_code}")
-            return response.ok
-        except requests.exceptions.RequestException as e:
-            print(f"could not trash {asset_ids}: {e}")
+        response = self.__request("DELETE", "/assets", data=json.dumps({"ids": list(asset_ids)}), json_body=True)
+        if response is None or not response.ok:
+            print(f"could not trash {asset_ids}")
             return False
+        return True
+
+    def __album_name_for(self, timestamp):
+        if not self.__album_by_year:
+            return self.album_name
+        return f"{self.album_name} {datetime.fromtimestamp(timestamp).year}"
+
+    def __album_id_for(self, album_name):
+        if album_name not in self.__album_ids:
+            self.__album_ids[album_name] = self.__find_album(album_name) or self.__create_album(album_name)
+        return self.__album_ids[album_name]
+
+    def __find_album(self, album_name):
+        response = self.__request("GET", "/albums", params={'isOwned': 'true', 'name': album_name})
+        if response is None or not response.ok:
+            raise ServerUnreachableError("could not list albums")
+        # the server filters too, but old servers ignore the filters, so match again here
+        for album in response.json():
+            if album['albumName'] == album_name and album.get('isOwned'):
+                return album['id']
+        return None
+
+    def __create_album(self, album_name):
+        print("no album found ... creating new one")
+        payload = json.dumps({
+            "albumName": album_name,
+            "description": "The Immich Desktop Client puts all images from " + self.album_name + " in this folder",
+        })
+        response = self.__request("POST", "/albums", data=payload, json_body=True)
+        if response is None or not response.ok:
+            raise ServerUnreachableError("could not create album")
+        print("Successfully created album " + str(response.json()))
+        return response.json()['id']
+
+    def __add_asset_to_album(self, asset_id, album_name):
+        try:
+            album_id = self.__album_id_for(album_name)
+        except ServerUnreachableError as e:
+            print(f"could not file asset into album {album_name}: {e}")
+            return
+        response = self.__request("PUT", f"/albums/{album_id}/assets", data=json.dumps({"ids": [str(asset_id)]}),
+                                  json_body=True)
+        if response is None or not response.ok:
+            print(f"could not add asset to album {album_name}")
+
+    def check_server_supported(self):
+        response = self.__request("GET", "/server/version")
+        if response is None:
+            raise ServerUnreachableError("could not fetch the server version")
+        try:
+            payload = response.json()
+            version = (payload['major'], payload['minor'], payload['patch'])
+            if not all(isinstance(part, int) for part in version):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            raise UnsupportedServerError("server did not report a parseable version")
+        if version < MINIMUM_SERVER_VERSION:
+            raise UnsupportedServerError(
+                "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
+
+    def test_connection(self):
+        response = self.__request("POST", "/auth/validateToken")
+        if response is not None:
+            print(response.json())
+            return response.status_code
+
+    # ---- plumbing -------------------------------------------------------------------------------------------
+
+    def __request(self, method, path, data=None, params=None, json_body=False):
+        """A retried API call; returns the response, or None if the server could not be reached."""
+        headers = {'Accept': 'application/json', 'x-api-key': self.__apiKey}
+        if json_body:
+            headers['Content-Type'] = 'application/json'
+        try:
+            return self.__with_retries(lambda: requests.request(
+                method, self.__immichHost + path, headers=headers, data=data, params=params))
+        except requests.exceptions.RequestException as e:
+            print(f"{method} {path} failed: {e}")
+            return None
+
+    @staticmethod
+    def __with_retries(call):
+        """Retry on network errors and 5xx responses with exponential backoff."""
+        delay = RETRY_BASE_DELAY_SECONDS
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            last_attempt = attempt == RETRY_ATTEMPTS
+            try:
+                response = call()
+            except requests.exceptions.RequestException:
+                if last_attempt:
+                    raise
+            else:
+                if response.status_code < 500 or last_attempt:
+                    return response
+            sleep(delay)
+            delay *= 2
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""
         path = os.path.normpath(path)
         candidates = [root for root in self.__roots if path.startswith(root + os.sep)]
         return max(candidates, key=len) if candidates else None
-
-    def __create_album(self):
-        payload = json.dumps({
-            "albumName": self.album_name,
-            "description": "The Immich Desktop Client puts all images from " + self.album_name + " in this folder",
-        })
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-        response = requests.request("POST", self.__immichHost + "/albums", headers=headers, data=payload)
-        print("Successfully created album " + str(response.json()))
-        return json.loads(response.text)['id']
-
-    def __get_album_id(self):
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        response = requests.request("GET", self.__immichHost + "/albums", headers=headers)
-        response = json.loads(response.text)
-
-        album_id = None
-        for album in response:
-            if album['albumName'] == self.album_name and album.get('isOwned'):
-                album_id = album['id']
-        if album_id is None:
-            print("no album found ... creating new one")
-            album_id = self.__create_album()
-
-        return album_id
-
-    def __add_asset_to_album(self, asset_id):
-        payload = json.dumps({
-            "ids": [
-                str(asset_id)
-            ]
-        })
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        response = requests.request("PUT", self.__immichHost + "/albums/" + self.__album_id + "/assets",
-                                    headers=headers, data=payload)
-        print(response.json())
-        print("successfully added asset to album")
 
     @staticmethod
     def __get_sha1(file: str):
@@ -276,34 +331,3 @@ class Immich:
     def __iso_timestamp(timestamp: float):
         # Immich 3.x rejects dates without a UTC offset
         return datetime.fromtimestamp(timestamp).astimezone().isoformat()
-
-    def check_server_supported(self):
-        headers = {'Accept': 'application/json', 'x-api-key': self.__apiKey}
-        try:
-            response = requests.request("GET", self.__immichHost + "/server/version", headers=headers)
-        except requests.exceptions.RequestException as e:
-            raise ServerUnreachableError(str(e)) from e
-
-        try:
-            payload = response.json()
-            version = (payload['major'], payload['minor'], payload['patch'])
-            if not all(isinstance(part, int) for part in version):
-                raise ValueError
-        except (ValueError, KeyError, TypeError):
-            raise UnsupportedServerError("server did not report a parseable version")
-        if version < MINIMUM_SERVER_VERSION:
-            raise UnsupportedServerError(
-                "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
-
-    def test_connection(self):
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        try:
-            response = requests.request("POST", self.__immichHost + "/auth/validateToken", headers=headers)
-            print(response.json())
-            return response.status_code
-        except requests.exceptions.RequestException as e:
-            print(e)
