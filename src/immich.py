@@ -110,6 +110,7 @@ class Immich:
         self.__roots = [os.path.normpath(directory) for directory in directories]
 
         print("catch up with files already in the upload record")
+        empty_roots = set()
         for entry in self.record.entries():
             root = entry.root or self.__root_for(entry.path)
             if root is None or root not in self.__roots:
@@ -121,7 +122,11 @@ class Immich:
             if os.path.isfile(entry.path):
                 self.modify(entry.path)
             elif self.__catch_up_delete:
-                self.__forget_missing(entry)
+                if root not in empty_roots and self.__looks_unmounted(root):
+                    print(f"watched root {root} is empty: not trashing anything for it, it may be an unmounted drive")
+                    empty_roots.add(root)
+                if root not in empty_roots:
+                    self.__forget_missing(entry)
 
         print("uploading new files")
         for root in self.__roots:
@@ -207,6 +212,15 @@ class Immich:
         for entry in self.record.entries():
             if os.path.normcase(entry.path).startswith(prefix):
                 self.move(entry.path, destination + entry.path[len(source):])
+
+    @staticmethod
+    def __looks_unmounted(root):
+        """An empty (or unlistable) root is indistinguishable from an unmounted drive or an offline share's mount point."""
+        try:
+            with os.scandir(root) as entries:
+                return next(entries, None) is None
+        except OSError:
+            return True
 
     def __forget_missing(self, entry):
         """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""

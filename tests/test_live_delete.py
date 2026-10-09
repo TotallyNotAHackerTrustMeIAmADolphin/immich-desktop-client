@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from test_upload import make_photo
 
 
@@ -47,6 +51,7 @@ def test_delete_of_unrecorded_file_is_a_no_op(deleting_client, api, tmp_path):
     assert api.deletes == []
 
 
+@pytest.mark.skipif(os.sep != "\\", reason="mixed slashes only occur on Windows")
 def test_live_delete_matches_a_startup_upload_when_watchdog_mixes_slashes(deleting_client, api, tmp_path):
     photo = make_photo(tmp_path)
     deleting_client.upload_all_images([str(tmp_path).replace("\\", "/")], (".jpg", ".png"))  # recorded via os.walk
