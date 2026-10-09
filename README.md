@@ -13,8 +13,11 @@ desktop to your Immich server.
 - **Automated Media Upload**: Scans specified directories for media files and uploads new or modified files to your
   Immich server
 - **Uploads to Album**: Automatically creates an album and puts all the images in it
-- **Local Shelve Storage**: Tracks uploaded files using local shelve storage and SHA-1 hashes to avoid duplicate uploads
+- **Local Upload Record**: Tracks uploaded files in a local SQLite database with SHA-1 hashes to avoid duplicate uploads
 - **Checksum Validation**: Ensures data integrity with SHA-1 checksum verification during uploads
+- **Replace & Delete (opt-in)**: Re-uploads edited files and moves the old copy to the Immich trash; can also trash
+  uploads when you delete the local file. It never force-deletes and only touches files this client uploaded itself
+- **Tray, Settings & Autostart**: Settings window, tray menu, single instance and start with Windows
 - **Cross-Platform**: _should_ be compatible with Windows, macOS, and Linux (only tested on Windows 11)
 
 ## Demo
@@ -53,11 +56,26 @@ theoretically the python script is cross platform, therefore it should be execut
 - **`url`**: The base URL of your Immich server API endpoint. _Ensure the URL ends with `/api` and does not have a
   trailing slash._
 - **`album`**: (Optional) The name of the album where media files will be uploaded.
+- **`album_by_year`**: (Optional, default `false`) Upload into one album per year, named `<album> <year>`.
 
 #### `watchdog`
 
 - **`directories`**: A list of directories the client will monitor for media files. Files in these directories will be
   automatically uploaded to the Immich server.
+- **`recursive`**: (Optional, default `true`) Also watch sub-folders.
+
+#### `delete`
+
+Optional, everything defaults to `false`. Deleting only ever moves this client's own uploads to the Immich trash
+(restorable there); files that already existed on the server are never touched.
+
+- **`live`**: Trash the upload when you delete the local file while the app is running.
+- **`catch_up`**: At startup, trash uploads whose local file is gone. Folders that cannot be reached (unplugged drive)
+  are skipped.
+
+#### Server requirements
+
+Immich **3.0.0 or newer**. Older or unreadable server versions are refused.
 
 ### Example Configuration
 
@@ -80,8 +98,14 @@ watchdog:
 1. run ``pyinstaller -n immich-dsektop-client -F src/main.py``
 2. run ``resources\installer-script.iss`` with Inno Setup
 
+See [docs/releasing.md](docs/releasing.md) for the tests and checks that gate a release.
+
+## Credits
+
+Replace, delete, tray, autostart, `album_by_year`, `recursive` and retry behaviour were first built in
+[GuidoJeuken-6512's fork](https://github.com/GuidoJeuken-6512/immich-desktop-client) and are re-implemented here.
+Linux fixes by [tkalfaoglu](https://github.com/tkalfaoglu/immich-desktop-client) informed the cross-platform work.
+
 ## Roadmap
 
-- Add support for replacing assets instead of duplicating versions.
-- Enable file deletion from the Immich server through the client.
 - Put files from different folders in different albums

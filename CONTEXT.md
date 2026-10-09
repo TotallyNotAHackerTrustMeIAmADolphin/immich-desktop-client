@@ -21,7 +21,7 @@ An asset a `POST /assets` call reports as already existing (`status:"duplicate"`
 _Avoid_: existing asset.
 
 **Watched root**:
-One of the top-level folders the client is configured to watch. It groups local upload record entries and is the unit the client checks for accessibility before a catch-up scan: if a watched root itself can't currently be reached (an unmounted drive, an unavailable network share), every entry under it is skipped for that run rather than treated as deleted. Removing a watched root from configuration leaves its local upload record entries untouched permanently — no pruning, no server action; only future watching stops.
+One of the top-level folders the client is configured to watch. It groups local upload record entries and is the unit the client checks for accessibility before a catch-up scan: if a watched root itself can't currently be reached (an unmounted drive, an unavailable network share), every entry under it is skipped for that run rather than treated as deleted. A watched root that exists but is completely empty is treated the same way for catch-up delete, because an unmounted drive's mount point looks exactly like that. Removing a watched root from configuration leaves its local upload record entries untouched permanently — no pruning, no server action; only future watching stops.
 _Avoid_: watched folder, watched directory (use when speaking generally about any folder under a root; "watched root" specifically means the configured top-level entry the availability check applies to).
 
 **Live delete**:

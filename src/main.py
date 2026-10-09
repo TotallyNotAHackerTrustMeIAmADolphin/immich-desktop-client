@@ -1,13 +1,23 @@
 import mimetypes
+import os
+import sys
+import threading
+from contextlib import contextmanager
+from time import sleep
 from pathlib import Path
 
-import yaml
 from PIL import Image
 from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from immich import Immich
+import autostart
+from gui_runner import GuiRunner
+from single_instance import acquire
+from config import (default_config_dir, existing_directories, is_placeholder_config, load_config,
+                    write_template_config)
+from immich import (Immich, InvalidServerResponseError, ServerUnreachableError, UnsupportedServerError,
+                    is_media_file)
 
 
 def on_clicked(icon, item):
@@ -35,59 +45,204 @@ def get_extensions_for_type():
 class MyHandler(FileSystemEventHandler):
     def on_created(self, event):
         global state
-        if state and not event.is_directory and event.src_path.endswith(media_file_extensions):
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
             print(f"File {event.src_path} has been created!")
-            api.created(event.src_path)
+            try:
+                api.created(event.src_path)
+            except Exception as e:  # an escaping exception would silently end the watcher thread
+                print(f"error handling creation of {event.src_path}: {e!r}")
 
     def on_deleted(self, event):
         global state
-        if state and not event.is_directory and event.src_path.endswith(media_file_extensions):
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
             print(f"File {event.src_path} has been deleted!")
-            api.delete(event.src_path)
+            try:
+                api.delete(event.src_path)
+            except Exception as e:
+                print(f"error handling deletion of {event.src_path}: {e!r}")
 
-    # TODO: make these event handlers work
-    #   def on_moved(self, event):
-    #       if not event.is_directory and event.src_path.endswith(".png") or event.src_path.endswith(".jpg") or event.src_path.endswith(".jpeg"):
-    #           print(f"File {event.src_path} has been moved!")
-    #           api.move(event.src_path,event.dest_path)
-    #  def on_modified(self, event):
-    #      if not event.is_directory and event.src_path.endswith(".png") or event.src_path.endswith(".jpg") or event.src_path.endswith(".jpeg"):
-    #          print(f"File {event.src_path} has been modified!")
-    #          api.modify(event.src_path)
+    def on_moved(self, event):
+        global state
+        if (state and not event.is_directory and is_media_file(event.src_path, media_file_extensions)
+                and is_media_file(event.dest_path, media_file_extensions)):
+            print(f"File {event.src_path} has been moved to {event.dest_path}!")
+            try:
+                api.move(event.src_path, event.dest_path)
+            except Exception as e:
+                print(f"error handling move of {event.src_path}: {e!r}")
 
+    def on_modified(self, event):
+        global state
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
+            sleep(1)  # let the writer finish before hashing
+            print(f"File {event.src_path} has been modified!")
+            try:
+                api.modify(event.src_path)
+            except Exception as e:
+                print(f"error handling modification of {event.src_path}: {e!r}")
+
+
+instance_lock = acquire()
+if instance_lock is None:
+    sys.exit("Immich Desktop Client is already running.")
 
 # Load Config
-with open(str(Path.home()) + '/.Immich-desktop-client/config.yaml', 'rt') as file:
-    config = yaml.safe_load(file)
+config = load_config(default_config_dir())
+if config is None or is_placeholder_config(config):
+    # first run (or the untouched example config): ask for the settings in a window
+    config = None
+    try:
+        from settings_dialog import open_settings
+        if open_settings():
+            config = load_config(default_config_dir())
+    except Exception as e:  # no tkinter, or no display (headless session)
+        print(f"could not show the settings window: {e!r}")
+    if config is None or is_placeholder_config(config):
+        sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
+                 f"or start the app again to open the settings window.")
 
 media_file_extensions = get_extensions_for_type()
 
 immich_host = config["api"]["url"]
-album_name = config["api"]["album"]
+album_name = config["api"].get("album")
+if album_name is not None and str(album_name).startswith("<"):
+    album_name = None  # still the template placeholder
 api_key = config["api"]["key"]
 directories_to_watch = config["watchdog"]["directories"]
+delete_options = config.get("delete") or {}
 
 state = True
 
-api = Immich(immich_host, api_key, album_name)
-api.test_connection()
-api.print_shelve()
+recursive = config["watchdog"].get("recursive", True)
+
+# at login the network is often not up yet, so keep trying for a while before giving up
+STARTUP_ATTEMPTS = 20
+for attempt in range(1, STARTUP_ATTEMPTS + 1):
+    try:
+        api = Immich(immich_host, api_key, album_name,
+                     live_delete=delete_options.get("live", False),
+                     catch_up_delete=delete_options.get("catch_up", False),
+                     recursive=recursive,
+                     album_by_year=config["api"].get("album_by_year", False))
+        break
+    except UnsupportedServerError as e:
+        sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+    except InvalidServerResponseError as e:
+        sys.exit(f"Refusing to start: {e}")
+    except ServerUnreachableError as e:
+        if attempt == STARTUP_ATTEMPTS:
+            sys.exit(f"Could not reach the Immich server: {e}")
+        print(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
+        sleep(30)
+if api.test_connection() in (401, 403):
+    sys.exit("The Immich server rejected the API key. Open the settings and check it.")
 api.upload_all_images(directories_to_watch, media_file_extensions)
 
 # Create observer and event handler
 observer = Observer()
 event_handler = MyHandler()
-for directory in directories_to_watch:
-    observer.schedule(event_handler, directory, recursive=True)
-    print("watching directory: " + directory)
+for directory in existing_directories(directories_to_watch):
+    try:
+        observer.schedule(event_handler, directory, recursive=recursive)
+        print("watching directory: " + directory)
+    except OSError as e:
+        print(f"could not watch {directory}: {e!r}")
 observer.start()
+
+def load_icon():
+    try:
+        return Image.open(default_config_dir() / 'icon.ico')
+    except OSError:
+        return Image.new('RGB', (64, 64), (66, 80, 175))  # plain fallback when the icon file is missing
+
+
+# Tk windows only ever run on the main thread (see GuiRunner); tray callbacks just submit tasks.
+runner = GuiRunner(inline=sys.platform == "darwin")  # macOS: the tray owns the main thread
+
+
+@contextmanager
+def hidden_root():
+    import tkinter
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    try:
+        yield root
+    finally:
+        root.destroy()
+
+
+def open_config(tray_icon, tray_item):
+    path = write_template_config(default_config_dir())
+    if hasattr(os, "startfile"):
+        os.startfile(path)
+    else:
+        print(f"config file: {path}")
+
+
+def open_settings_window(tray_icon, tray_item):
+    def show():
+        from settings_dialog import open_settings
+        open_settings()
+
+    runner.submit_once("settings", show)
+
+
+def delete_all_uploads(tray_icon, tray_item):
+    def show_result(trashed):
+        from tkinter import messagebox
+        with hidden_root() as root:
+            messagebox.showinfo("Immich Desktop Client", f"Moved {trashed} uploads to the Immich trash.", parent=root)
+
+    def work():  # network loop: off the GUI thread so windows and the tray stay responsive
+        trashed = api.delete_all_own_uploads()
+        runner.submit(lambda: show_result(trashed))
+
+    def confirm():
+        from tkinter import messagebox
+        with hidden_root() as root:
+            confirmed = messagebox.askyesno(
+                "Immich Desktop Client",
+                "Move every file this app uploaded to the Immich trash?\n\n"
+                "Files that already existed on the server are not touched. "
+                "Trashed items can be restored in Immich until its trash is emptied.",
+                parent=root)
+        if confirmed:
+            threading.Thread(target=work, daemon=True).start()
+
+    runner.submit_once("delete-all", confirm)
+
+
+def toggle_autostart(tray_icon, tray_item):
+    if autostart.is_enabled():
+        autostart.disable()
+    else:
+        autostart.enable(sys.executable)
+
+
+def quit_app(tray_icon, tray_item):
+    observer.stop()
+    tray_icon.stop()
+    runner.stop()
+
 
 # Update the state in `on_clicked` and return the new state in
 # a `checked` callable
-icon('test', Image.open(str(Path.home()) + '/.Immich-desktop-client/icon.ico'), menu=menu(
+tray = icon('Immich Desktop Client', load_icon(), menu=menu(
     item(
         'Sync directories to Immich',
         on_clicked,
-        checked=lambda item: state)
-)
-     ).run()
+        checked=lambda item: state),
+    item('Start with Windows', toggle_autostart, checked=lambda item: autostart.is_enabled(),
+         visible=sys.platform == 'win32' and getattr(sys, 'frozen', False)),
+    item('Settings...', open_settings_window),
+    item('Open config file', open_config),
+    item('Move all uploads to Immich trash...', delete_all_uploads),
+    item('Quit', quit_app),
+))
+if sys.platform == "darwin":
+    tray.run()
+else:
+    tray.run_detached()
+    runner.run()  # blocks the main thread, executing GUI tasks, until Quit
+instance_lock.release()

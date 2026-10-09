@@ -1,254 +1,375 @@
-import dbm
 import hashlib
 import json
 import os.path
-import shelve
 import socket
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from time import sleep
 
 import requests
 
+from record import UploadRecord, migrate_legacy_shelve
+
+MINIMUM_SERVER_VERSION = (3, 0, 0)
+OWNERSHIP_HINT_KEY = "immich-desktop-client"
+RETRY_ATTEMPTS = 4
+RETRY_BASE_DELAY_SECONDS = 1
+TRASH_BATCH_SIZE = 100
+
+
+class UnsupportedServerError(Exception):
+    """The server is older than MINIMUM_SERVER_VERSION or reports no parseable version."""
+
+
+class InvalidServerResponseError(Exception):
+    """The address answered, but not like an Immich API (wrong URL, proxy error page, ...)."""
+
+
+class ServerUnreachableError(Exception):
+    """The server could not be reached; a transient condition, not a refusal."""
+
+
+def with_retries(call):
+    """Retry on network errors and 5xx responses with exponential backoff."""
+    delay = RETRY_BASE_DELAY_SECONDS
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        last_attempt = attempt == RETRY_ATTEMPTS
+        try:
+            response = call()
+        except requests.exceptions.RequestException:
+            if last_attempt:
+                raise
+        else:
+            if response.status_code < 500 or last_attempt:
+                return response
+        sleep(delay)
+        delay *= 2
+
+
+def check_server_supported(immich_host, api_key):
+    """Raise UnsupportedServerError / ServerUnreachableError unless the server meets the version floor."""
+    headers = {'Accept': 'application/json', 'x-api-key': api_key}
+    try:
+        response = with_retries(lambda: requests.request("GET", immich_host + "/server/version", headers=headers))
+    except requests.exceptions.RequestException as e:
+        raise ServerUnreachableError(str(e)) from e
+    if response.status_code >= 500:
+        raise ServerUnreachableError(f"server answered {response.status_code}")
+    if not response.ok:
+        raise InvalidServerResponseError(
+            f"{immich_host} answered HTTP {response.status_code}; check that the URL ends in /api")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise InvalidServerResponseError(f"{immich_host} did not answer like an Immich API; check the URL")
+    try:
+        version = (payload['major'], payload['minor'], payload['patch'])
+        if not all(isinstance(part, int) for part in version):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise UnsupportedServerError("server did not report a parseable version")
+    if version < MINIMUM_SERVER_VERSION:
+        raise UnsupportedServerError(
+            "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
+
+
+def is_media_file(path, media_file_extensions):
+    return str(path).lower().endswith(media_file_extensions)
+
 
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, device_id=None, shelve_path=None):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None,
+                 live_delete=False, catch_up_delete=False, recursive=True, album_by_year=False):
         self.__immichHost = immich_host
         self.__apiKey = api_key
+        self.__roots = []
+        self.__live_delete = live_delete
+        self.__catch_up_delete = catch_up_delete
+        self.__recursive = recursive
+        self.__album_by_year = album_by_year
+        self.__album_ids = {}
 
-        if shelve_path is None:
-            self.__shelve_path = str(Path.home()) + "/.Immich-desktop-client/shelve"
+        if record_path is None:
+            data_dir = Path.home() / ".Immich-desktop-client"
+            self.record = UploadRecord(data_dir / "record.sqlite")
+            migrate_legacy_shelve(data_dir / "shelve", self.record)
         else:
-            self.__shelve_path = shelve_path
+            self.record = UploadRecord(record_path)
 
-        if device_id is None:
-            self.__uuid = self.__get_uuid()
-        else:
-            self.__uuid = device_id
+        self.check_server_supported()
 
-        if album_name is None:
-            self.album_name = socket.gethostname()
-        else:
-            self.album_name = album_name
+        self.album_name = socket.gethostname() if album_name is None else album_name
+        if album_id is not None:
+            self.__album_ids[self.album_name] = album_id
+        elif not album_by_year:
+            self.__album_id_for(self.album_name)
 
-        if album_id is None:
-            self.__album_id = self.__get_album_id()
-        else:
-            self.__album_id = album_id
+    # ---- scanning -------------------------------------------------------------------------------------------
 
     def upload_all_images(self, directories, media_file_extensions):
-        try:
-            with shelve.open(self.__shelve_path, flag='r') as db:
-                print("catch up with files already stored in shelve")
-                data = db.keys()
-                for key in data:
-                    if os.path.isfile(key):
-                        if self.__get_sha1(key) != db[key][1]:
-                            self.created(str(key))
-                    else:
-                        self.delete(key)
+        self.__roots = [os.path.normpath(directory) for directory in directories]
 
-                print("uploading new files")
-                matching_files = []
-                for directory in directories:
-                    for filename in os.listdir(directory):
-                        if filename.endswith(media_file_extensions):
-                            matching_files.append(os.path.join(directory, filename))
+        print("catch up with files already in the upload record")
+        empty_roots = set()
+        for entry in self.record.entries():
+            root = entry.root or self.__root_for(entry.path)
+            if root is None or root not in self.__roots:
+                continue  # root removed from the config: its entries stay untouched
+            if not os.path.isdir(root):
+                continue  # root currently unreachable (unmounted drive, offline share): skip, never delete
+            if entry.root is None:
+                self.record.set_root(entry.path, root)
+            if os.path.isfile(entry.path):
+                self.modify(entry.path)
+            elif self.__catch_up_delete:
+                if root not in empty_roots and self.__looks_unmounted(root):
+                    print(f"watched root {root} is empty: not trashing anything for it, it may be an unmounted drive")
+                    empty_roots.add(root)
+                if root not in empty_roots:
+                    self.__forget_missing(entry)
 
-                for file in matching_files:
-                    if file not in db:
-                        self.created(file)
+        print("uploading new files")
+        for root in self.__roots:
+            if not os.path.isdir(root):
+                print(f"skipping unreachable watched root {root}")
+                continue
+            for file in self.__media_files(root, media_file_extensions):
+                if self.record.get(file) is None:
+                    self.created(file)
 
+    def __media_files(self, root, media_file_extensions):
+        if self.__recursive:
+            for folder, _, filenames in os.walk(root):
+                for filename in sorted(filenames):
+                    if is_media_file(filename, media_file_extensions):
+                        yield os.path.join(folder, filename)
+        else:
+            for filename in sorted(os.listdir(root)):
+                if is_media_file(filename, media_file_extensions):
+                    yield os.path.join(root, filename)
 
-        except dbm.error:
-            print("cant open non-existing shelve")
+    # ---- file events ----------------------------------------------------------------------------------------
 
     def created(self, file):
+        self.__upload(os.path.normpath(file))
+
+    def modify(self, file):
+        """Replace the server copy of a locally modified file (acts on a checksum change only)."""
+        file = os.path.normpath(file)  # watchdog reports "C:/dir\x.png" when the watched dir is written with "/"
+        entry = self.record.get(file)
+        if entry is None:
+            self.created(file)
+            return
+        if self.__get_sha1(file) == entry.checksum:
+            return
+
+        uploaded = self.__upload(file)
+        if uploaded is None:
+            return  # the old asset and its record entry are untouched
+        new_id, status = uploaded
+        if not entry.own_upload or status != 'created' or new_id == entry.asset_id:
+            return  # never copy over or trash an asset this client did not create itself
+        if not self.__copy_asset_metadata(entry.asset_id, new_id):
+            return  # albums/favorite could not be carried over: keep the old asset rather than lose them
+        self.__trash([entry.asset_id])
+
+    def delete(self, file):
+        """Live delete: a watched file disappeared while the app was running."""
+        file = os.path.normpath(file)
+        entry = self.record.get(file)
+        if entry is None:
+            return
+        if self.__live_delete and entry.own_upload and not self.__trash([entry.asset_id]):
+            return  # trash failed: keep the entry rather than lose track of the asset
+        self.record.remove(file)
+
+    def move(self, source, destination):
+        source, destination = os.path.normpath(source), os.path.normpath(destination)
+        entry = self.record.get(source)
+        if entry is None:
+            return
+        self.record.remove(source)
+        self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload,
+                           root=self.__root_for(destination) or entry.root)
+
+    def delete_all_own_uploads(self):
+        """Move every own upload to the server's trash. Returns how many were trashed."""
+        own = [entry for entry in self.record.entries() if entry.own_upload]
+        trashed = 0
+        for start in range(0, len(own), TRASH_BATCH_SIZE):
+            batch = own[start:start + TRASH_BATCH_SIZE]
+            if not self.__trash([entry.asset_id for entry in batch]):
+                continue  # keep these entries so nothing is forgotten that is still on the server
+            for entry in batch:
+                self.record.remove(entry.path)
+            trashed += len(batch)
+        return trashed
+
+    def move_folder(self, source, destination):
+        """A folder was moved or renamed: re-point every record entry below it, no server calls."""
+        source, destination = os.path.normpath(source), os.path.normpath(destination)
+        prefix = os.path.normcase(source) + os.sep
+        for entry in self.record.entries():
+            if os.path.normcase(entry.path).startswith(prefix):
+                self.move(entry.path, destination + entry.path[len(source):])
+
+    @staticmethod
+    def __looks_unmounted(root):
+        """An empty (or unlistable) root is indistinguishable from an unmounted drive or an offline share's mount point."""
+        try:
+            with os.scandir(root) as entries:
+                return next(entries, None) is None
+        except OSError:
+            return True
+
+    def __forget_missing(self, entry):
+        """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""
+        if entry.own_upload and not self.__trash([entry.asset_id]):
+            return  # keep the entry so the next startup retries
+        self.record.remove(entry.path)
+
+    # ---- server calls ---------------------------------------------------------------------------------------
+
+    def __upload(self, file):
+        """Upload a file and record it. Returns (asset_id, status), or None if the upload failed."""
         try:
             stats = self.__get_file_stats(file)
         except FileNotFoundError:
             print("could not create file")
-            return
+            return None
 
+        checksum = self.__get_sha1(file)
+        if checksum is None:
+            return None
         headers = {
             'Accept': 'application/json',
             'x-api-key': self.__apiKey,
-            'x-Immich-checksum': self.__get_sha1(file)
+            'x-Immich-checksum': checksum
         }
-
         data = {
-            'deviceAssetId': f"{file}-{stats.st_mtime}",
-            'deviceId': self.__uuid,
-            'fileCreatedAt': datetime.fromtimestamp(stats.st_mtime),
-            'fileModifiedAt': datetime.fromtimestamp(stats.st_mtime),
+            'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
+            'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
             'isFavorite': 'false',
+            'metadata': json.dumps([{'key': OWNERSHIP_HINT_KEY, 'value': {'checksum': checksum}}]),
         }
 
-        files = {
-            'assetData': open(file, 'rb')
-        }
+        def post():
+            with open(file, 'rb') as asset_data:
+                return requests.post(self.__immichHost + "/assets", headers=headers, data=data,
+                                     files={'assetData': asset_data})
+
         try:
-            response = requests.post(self.__immichHost + "/assets", headers=headers, data=data, files=files)
-        except Exception as e:
-            print(e)
-        else:
-            image_id = json.loads(response.text)
-            print("satus: " + image_id['status'])
-            self.__save_image_to_shelve(image_id['id'], file)
-            self.__add_asset_to_album(image_id['id'])
-            print("saved image successfully: " + str(response.text))
+            response = with_retries(post)
+        except (requests.exceptions.RequestException, OSError) as e:
+            print(f"upload of {file} failed: {e}")
+            return None
+        if not response.ok:
+            print(f"upload of {file} failed: {response.status_code} {response.text}")
+            return None
 
-    # TODO: Create option to replace assets instead of adding the new version
-    #    def modify(self, file):
-    #                try:
-    #                    stats = self.__get_file_stats(file)
-    #                except FileNotFoundError:
-    #                    print("could not create file")
-    #                    return
-    #        try:
-    #            asset_id = self.__get_image_id(file)
-    #        except KeyError:
-    #            print("trying to modify non-uploaded file ... uploading file")
-    #            self.created(file)
-    #        else:
-    #            print(file)
-    #            data = {
-    #                'deviceAssetId': f"{file}-{stats.st_mtime}",
-    #                'deviceId': self.__uuid,
-    #                'fileCreatedAt': datetime.fromtimestamp(stats.st_mtime),
-    #                'fileModifiedAt': datetime.fromtimestamp(stats.st_mtime)
-    #            }
-    #            files=[
-    #                ('assetData',('IMAGE',open(file,'rb'),'application/octet-stream'))
-    #            ]
-    #            headers = {
-    #                'Accept': 'application/json',
-    #                'x-api-key': self.__apiKey
-    #            }
-    #            try:
-    #                print(f"{self.__immichHost}/assets/{asset_id}/original")
-    #                response = requests.request(method="PUT", url=f"{self.__immichHost}/assets/{asset_id}/original", headers=headers,
-    #                                            files=files, data=data)
-    #            except Exception as e:
-    #                print("error when replacing file" + e.__str__())
-    #            else:
-    #                if response.status_code == 200:
-    #                    self.__save_image_to_shelve(asset_id, file)
-    #                else:
-    #                    print("error when replacing file")
-    #                print(response.text)
+        uploaded = json.loads(response.text)
+        asset_id, status = uploaded['id'], uploaded['status']
+        print("status: " + status)
+        previous = self.record.get(file)
+        own_upload = status == 'created' or (
+            previous is not None and previous.own_upload and previous.asset_id == asset_id)
+        self.record.upsert(file, asset_id, checksum, own_upload=own_upload, root=self.__root_for(file))
+        self.__add_asset_to_album(asset_id, self.__album_name_for(stats.st_mtime))
+        return asset_id, status
 
-    def delete(self, file):
-        try:
-            self.__delete_image_from_shelve(file)
-        except KeyError:
-            print("trying to delete non-uploaded file")
+    def __copy_asset_metadata(self, source_id, target_id):
+        payload = json.dumps({"sourceId": source_id, "targetId": target_id})
+        response = self.__request("PUT", "/assets/copy", data=payload, json_body=True)
+        if response is None or not response.ok:
+            print("could not carry albums/favorite over to the new asset; keeping the old asset")
+            return False
+        return True
 
-    # TODO create Option for deleting images on server too
-    #    try:
-    #        assetId = self.__getImageId(file)
-    #    except KeyError:
-    #        print("deleting non-uploaded file")
-    #    else:
-    #        payload = json.dumps({
-    #            "force": True,
-    #            "ids": [
-    #                assetId
-    #            ]
-    #        })
-    #        headers = {
-    #            'Content-Type': 'application/json',
-    #            'x-api-key': self.__apiKey
-    #        }
-    #        try:
-    #            response = requests.request("DELETE", self.__immichHost + "/assets", headers=headers, data=payload)
-    #        except Exception as e:
-    #            print("error when deleting file: "+ e.__str__())
-    #            return
-    #        else:
-    #            print(response.text)
-    #            self.__delete_image_from_shelve(file)
-    def move(self, source, destination):
-        asset_id = self.__get_image_id(source)
-        self.__delete_image_from_shelve(source)
-        self.__save_image_to_shelve(asset_id, destination)
+    def __trash(self, asset_ids):
+        """Move assets to the server's trash; True on success. Deliberately never sends force (see ADR 0001)."""
+        response = self.__request("DELETE", "/assets", data=json.dumps({"ids": list(asset_ids)}), json_body=True)
+        if response is None or not response.ok:
+            print(f"could not trash {asset_ids}")
+            return False
+        return True
 
-    def __create_album(self):
+    def __album_name_for(self, timestamp):
+        if not self.__album_by_year:
+            return self.album_name
+        return f"{self.album_name} {datetime.fromtimestamp(timestamp).year}"
+
+    def __album_id_for(self, album_name):
+        if album_name not in self.__album_ids:
+            self.__album_ids[album_name] = self.__find_album(album_name) or self.__create_album(album_name)
+        return self.__album_ids[album_name]
+
+    def __find_album(self, album_name):
+        response = self.__request("GET", "/albums", params={'isOwned': 'true', 'name': album_name})
+        if response is None or not response.ok:
+            raise ServerUnreachableError("could not list albums")
+        # the server filters on isOwned=true (3.x does not echo the field back); match again in case it is present
+        for album in response.json():
+            if album['albumName'] == album_name and album.get('isOwned', True):
+                return album['id']
+        return None
+
+    def __create_album(self, album_name):
+        print("no album found ... creating new one")
         payload = json.dumps({
-            "albumName": self.album_name,
+            "albumName": album_name,
             "description": "The Immich Desktop Client puts all images from " + self.album_name + " in this folder",
         })
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-        response = requests.request("POST", self.__immichHost + "/albums", headers=headers, data=payload)
+        response = self.__request("POST", "/albums", data=payload, json_body=True)
+        if response is None or not response.ok:
+            raise ServerUnreachableError("could not create album")
         print("Successfully created album " + str(response.json()))
-        return json.loads(response.text)['asset_id']
+        return response.json()['id']
 
-    def __get_album_id(self):
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        response = requests.request("GET", self.__immichHost + "/albums", headers=headers)
-        response = json.loads(response.text)
-
-        album_id = None
-        for album in response:
-            if album['albumName'] == self.album_name:
-                album_id = album['id']
-        if album_id is None:
-            print("no album found ... creating new one")
-            album_id = self.__create_album()
-
-        return album_id
-
-    def __add_asset_to_album(self, asset_id):
-        payload = json.dumps({
-            "ids": [
-                str(asset_id)
-            ]
-        })
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        response = requests.request("PUT", self.__immichHost + "/albums/" + self.__album_id + "/assets",
-                                    headers=headers, data=payload)
-        print(response.json())
-        print("successfully added asset to album")
-
-    def __save_image_to_shelve(self, asset_id, file):
-        with shelve.open(self.__shelve_path, flag='c', writeback=True) as images:
-            images[file] = [asset_id, self.__get_sha1(file)]
-            print("added to shelve: " + str(file) + str(images[file]))
-
-    def __get_image_id(self, file):
-        with shelve.open(self.__shelve_path, flag='r') as images:
-            image_id = images[file][0]
-            return image_id
-
-    def __delete_image_from_shelve(self, file):
-        with shelve.open(self.__shelve_path, flag='c', writeback=True) as images:
-            del images[file]
-
-    def print_shelve(self):
+    def __add_asset_to_album(self, asset_id, album_name):
         try:
-            with shelve.open(self.__shelve_path, flag='r') as db:
-                data = db.keys()
+            album_id = self.__album_id_for(album_name)
+        except ServerUnreachableError as e:
+            print(f"could not file asset into album {album_name}: {e}")
+            return
+        response = self.__request("PUT", f"/albums/{album_id}/assets", data=json.dumps({"ids": [str(asset_id)]}),
+                                  json_body=True)
+        if response is None or not response.ok:
+            print(f"could not add asset to album {album_name}")
 
-                print("Start of stored data")
-                for key in data:
-                    print(key, db[key])
-                print("End of stored data")
-        except dbm.error:
-            print("cant export non-existing shelve")
+    def check_server_supported(self):
+        check_server_supported(self.__immichHost, self.__apiKey)
+
+    def test_connection(self):
+        response = self.__request("POST", "/auth/validateToken")
+        if response is not None:
+            print(response.json())
+            return response.status_code
+
+    # ---- plumbing -------------------------------------------------------------------------------------------
+
+    def __request(self, method, path, data=None, params=None, json_body=False):
+        """A retried API call; returns the response, or None if the server could not be reached."""
+        headers = {'Accept': 'application/json', 'x-api-key': self.__apiKey}
+        if json_body:
+            headers['Content-Type'] = 'application/json'
+        try:
+            return with_retries(lambda: requests.request(
+                method, self.__immichHost + path, headers=headers, data=data, params=params))
+        except requests.exceptions.RequestException as e:
+            print(f"{method} {path} failed: {e}")
+            return None
+
+    def __root_for(self, path):
+        """The watched root that contains path (the deepest one if roots are nested), or None."""
+        path = os.path.normcase(os.path.normpath(path))
+        candidates = []
+        for root in self.__roots:
+            prefix = os.path.normcase(root)
+            if not prefix.endswith(os.sep):
+                prefix += os.sep  # a drive root such as C:\ already ends in a separator
+            if path.startswith(prefix):
+                candidates.append(root)
+        return max(candidates, key=len) if candidates else None
 
     @staticmethod
     def __get_sha1(file: str):
@@ -274,18 +395,6 @@ class Immich:
             raise FileNotFoundError
 
     @staticmethod
-    def __get_uuid():
-        return str(subprocess.check_output('wmic csproduct get uuid')).split('\\r\\n')[1].strip('\\r').strip()
-
-    def test_connection(self):
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': self.__apiKey
-        }
-
-        try:
-            response = requests.request("POST", self.__immichHost + "/auth/validateToken", headers=headers)
-            print(response.json())
-            return response.status_code
-        except requests.exceptions.RequestException as e:
-            print(e)
+    def __iso_timestamp(timestamp: float):
+        # Immich 3.x rejects dates without a UTC offset
+        return datetime.fromtimestamp(timestamp).astimezone().isoformat()
