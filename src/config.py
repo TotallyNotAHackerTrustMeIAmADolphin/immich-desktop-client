@@ -52,13 +52,13 @@ def is_placeholder_config(config):
 
 
 def existing_directories(directories):
-    """The directories that are reachable right now (an unplugged drive is skipped, not fatal)."""
+    """The watched roots that are reachable right now (an unplugged drive is skipped, not fatal)."""
     reachable = []
     for directory in directories:
         if Path(directory).is_dir():
             reachable.append(directory)
         else:
-            print(f"watched folder not reachable, not watching it this session: {directory}")
+            print(f"watched root not reachable, not watching it this session: {directory}")
     return reachable
 
 
