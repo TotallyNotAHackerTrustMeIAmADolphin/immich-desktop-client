@@ -1,3 +1,5 @@
+import dbm
+import shelve
 import sqlite3
 from collections import namedtuple
 from contextlib import closing, contextmanager
@@ -56,3 +58,28 @@ class UploadRecord:
     @staticmethod
     def __entry(row):
         return Entry(row[0], row[1], row[2], bool(row[3]))
+
+
+def migrate_legacy_shelve(shelve_path, record):
+    """Import the old shelve's path -> [asset_id, checksum] mappings into the record.
+
+    The shelve never tracked whether this client created an asset, so every migrated entry is
+    marked as *not* an own upload and can never become delete-eligible. Existing record entries
+    win; returns the number of entries imported.
+    """
+    try:
+        with shelve.open(str(shelve_path), flag='r') as legacy:
+            items = list(legacy.items())
+    except dbm.error:
+        return 0
+
+    imported = 0
+    for path, value in items:
+        if record.get(path) is not None:
+            continue
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            continue
+        asset_id, checksum = value[0], value[1]
+        record.upsert(path, asset_id, checksum, own_upload=False)
+        imported += 1
+    return imported

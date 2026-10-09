@@ -8,7 +8,7 @@ from time import sleep
 
 import requests
 
-from record import UploadRecord
+from record import UploadRecord, migrate_legacy_shelve
 
 
 MINIMUM_SERVER_VERSION = (3, 0, 0)
@@ -33,8 +33,11 @@ class Immich:
         self.__apiKey = api_key
 
         if record_path is None:
-            record_path = Path.home() / ".Immich-desktop-client" / "record.sqlite"
-        self.record = UploadRecord(record_path)
+            data_dir = Path.home() / ".Immich-desktop-client"
+            self.record = UploadRecord(data_dir / "record.sqlite")
+            migrate_legacy_shelve(data_dir / "shelve", self.record)
+        else:
+            self.record = UploadRecord(record_path)
 
         self.check_server_supported()
 
