@@ -1,4 +1,5 @@
 import mimetypes
+import os
 import sys
 from time import sleep
 from pathlib import Path
@@ -8,6 +9,7 @@ from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from single_instance import acquire
 from config import default_config_dir, load_config, write_template_config
 from immich import Immich, ServerUnreachableError, UnsupportedServerError, is_media_file
 
@@ -74,6 +76,10 @@ class MyHandler(FileSystemEventHandler):
                 print(f"error handling modification of {event.src_path}: {e!r}")
 
 
+instance_lock = acquire()
+if instance_lock is None:
+    sys.exit("Immich Desktop Client is already running.")
+
 # Load Config
 config = load_config(default_config_dir())
 if config is None:
@@ -121,12 +127,34 @@ for directory in directories_to_watch:
     print("watching directory: " + directory)
 observer.start()
 
+def load_icon():
+    try:
+        return Image.open(default_config_dir() / 'icon.ico')
+    except OSError:
+        return Image.new('RGB', (64, 64), (66, 80, 175))  # plain fallback when the icon file is missing
+
+
+def open_config(tray_icon, tray_item):
+    path = write_template_config(default_config_dir())
+    if hasattr(os, "startfile"):
+        os.startfile(path)
+    else:
+        print(f"config file: {path}")
+
+
+def quit_app(tray_icon, tray_item):
+    observer.stop()
+    tray_icon.stop()
+
+
 # Update the state in `on_clicked` and return the new state in
 # a `checked` callable
-icon('test', Image.open(str(Path.home()) + '/.Immich-desktop-client/icon.ico'), menu=menu(
+icon('Immich Desktop Client', load_icon(), menu=menu(
     item(
         'Sync directories to Immich',
         on_clicked,
-        checked=lambda item: state)
-)
-     ).run()
+        checked=lambda item: state),
+    item('Open config file', open_config),
+    item('Quit', quit_app),
+)).run()
+instance_lock.release()
