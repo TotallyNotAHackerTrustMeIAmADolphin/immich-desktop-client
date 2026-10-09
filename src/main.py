@@ -52,15 +52,17 @@ class MyHandler(FileSystemEventHandler):
             except Exception as e:
                 print(f"error handling deletion of {event.src_path}: {e!r}")
 
-    # TODO: make these event handlers work
-    #   def on_moved(self, event):
-    #       if not event.is_directory and event.src_path.endswith(".png") or event.src_path.endswith(".jpg") or event.src_path.endswith(".jpeg"):
-    #           print(f"File {event.src_path} has been moved!")
-    #           api.move(event.src_path,event.dest_path)
-    #  def on_modified(self, event):
-    #      if not event.is_directory and event.src_path.endswith(".png") or event.src_path.endswith(".jpg") or event.src_path.endswith(".jpeg"):
-    #          print(f"File {event.src_path} has been modified!")
-    #          api.modify(event.src_path)
+    def on_moved(self, event):
+        global state
+        if (state and not event.is_directory and is_media_file(event.src_path, media_file_extensions)
+                and is_media_file(event.dest_path, media_file_extensions)):
+            print(f"File {event.src_path} has been moved to {event.dest_path}!")
+            try:
+                api.move(event.src_path, event.dest_path)
+            except Exception as e:
+                print(f"error handling move of {event.src_path}: {e!r}")
+
+    # TODO: modified files are handled by replace (see issue #18)
 
 
 # Load Config

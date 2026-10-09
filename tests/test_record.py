@@ -30,3 +30,12 @@ def test_remove_deletes_entry_and_ignores_unknown(tmp_path):
     record.remove("/a.jpg")
     record.remove("/never-there.jpg")
     assert record.get("/a.jpg") is None
+
+
+def test_root_is_stored_and_can_be_adopted_later(tmp_path):
+    record = UploadRecord(tmp_path / "r.sqlite")
+    record.upsert("/a.jpg", "asset-1", "sha", own_upload=False)
+    assert record.get("/a.jpg").root is None
+
+    record.set_root("/a.jpg", "/")
+    assert record.get("/a.jpg").root == "/"

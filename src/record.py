@@ -5,14 +5,15 @@ from collections import namedtuple
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-Entry = namedtuple("Entry", "path asset_id checksum own_upload")
+Entry = namedtuple("Entry", "path asset_id checksum own_upload root")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS uploads (
     path TEXT PRIMARY KEY,
     asset_id TEXT NOT NULL,
     checksum TEXT,
-    own_upload INTEGER NOT NULL DEFAULT 0
+    own_upload INTEGER NOT NULL DEFAULT 0,
+    root TEXT
 )
 """
 
@@ -28,19 +29,24 @@ class UploadRecord:
 
     def get(self, path):
         with closing(self.__connect()) as db:
-            row = db.execute("SELECT path, asset_id, checksum, own_upload FROM uploads WHERE path = ?",
+            row = db.execute("SELECT path, asset_id, checksum, own_upload, root FROM uploads WHERE path = ?",
                              (str(path),)).fetchone()
         return self.__entry(row) if row else None
 
     def entries(self):
         with closing(self.__connect()) as db:
-            rows = db.execute("SELECT path, asset_id, checksum, own_upload FROM uploads").fetchall()
+            rows = db.execute("SELECT path, asset_id, checksum, own_upload, root FROM uploads").fetchall()
         return [self.__entry(row) for row in rows]
 
-    def upsert(self, path, asset_id, checksum, own_upload):
+    def upsert(self, path, asset_id, checksum, own_upload, root=None):
         with self.__transaction() as db:
-            db.execute("INSERT OR REPLACE INTO uploads (path, asset_id, checksum, own_upload) VALUES (?, ?, ?, ?)",
-                       (str(path), asset_id, checksum, 1 if own_upload else 0))
+            db.execute("INSERT OR REPLACE INTO uploads (path, asset_id, checksum, own_upload, root) "
+                       "VALUES (?, ?, ?, ?, ?)",
+                       (str(path), asset_id, checksum, 1 if own_upload else 0, root))
+
+    def set_root(self, path, root):
+        with self.__transaction() as db:
+            db.execute("UPDATE uploads SET root = ? WHERE path = ?", (root, str(path)))
 
     def remove(self, path):
         with self.__transaction() as db:
@@ -57,7 +63,7 @@ class UploadRecord:
 
     @staticmethod
     def __entry(row):
-        return Entry(row[0], row[1], row[2], bool(row[3]))
+        return Entry(row[0], row[1], row[2], bool(row[3]), row[4])
 
 
 def migrate_legacy_shelve(shelve_path, record):

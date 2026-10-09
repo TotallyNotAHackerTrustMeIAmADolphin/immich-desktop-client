@@ -31,6 +31,7 @@ class Immich:
     def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None):
         self.__immichHost = immich_host
         self.__apiKey = api_key
+        self.__roots = []
 
         if record_path is None:
             data_dir = Path.home() / ".Immich-desktop-client"
@@ -52,16 +53,28 @@ class Immich:
             self.__album_id = album_id
 
     def upload_all_images(self, directories, media_file_extensions):
+        self.__roots = [os.path.normpath(directory) for directory in directories]
+
         print("catch up with files already in the upload record")
         for entry in self.record.entries():
-            # files missing from disk are deliberately left alone: absence is ambiguous (unmounted drive)
+            root = entry.root or self.__root_for(entry.path)
+            if root is None or root not in self.__roots:
+                continue  # root removed from the config: its entries stay untouched
+            if not os.path.isdir(root):
+                continue  # root currently unreachable (unmounted drive, offline share): skip, never delete
+            if entry.root is None:
+                self.record.set_root(entry.path, root)
+            # files missing from disk are deliberately left alone here (catch-up delete is a separate feature)
             if os.path.isfile(entry.path) and self.__get_sha1(entry.path) != entry.checksum:
                 self.created(entry.path)
 
         print("uploading new files")
-        for directory in directories:
-            for filename in os.listdir(directory):
-                file = os.path.join(directory, filename)
+        for root in self.__roots:
+            if not os.path.isdir(root):
+                print(f"skipping unreachable watched root {root}")
+                continue
+            for filename in os.listdir(root):
+                file = os.path.join(root, filename)
                 if is_media_file(filename, media_file_extensions) and self.record.get(file) is None:
                     self.created(file)
 
@@ -99,7 +112,8 @@ class Immich:
                 return
             image_id = json.loads(response.text)
             print("status: " + image_id['status'])
-            self.record.upsert(file, image_id['id'], checksum, own_upload=image_id['status'] == 'created')
+            self.record.upsert(file, image_id['id'], checksum, own_upload=image_id['status'] == 'created',
+                               root=self.__root_for(file))
             self.__add_asset_to_album(image_id['id'])
             print("saved image successfully: " + str(response.text))
 
@@ -175,7 +189,14 @@ class Immich:
         if entry is None:
             return
         self.record.remove(source)
-        self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload)
+        self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload,
+                           root=self.__root_for(destination) or entry.root)
+
+    def __root_for(self, path):
+        """The watched root that contains path (the deepest one if roots are nested), or None."""
+        path = os.path.normpath(path)
+        candidates = [root for root in self.__roots if path.startswith(root + os.sep)]
+        return max(candidates, key=len) if candidates else None
 
     def __create_album(self):
         payload = json.dumps({
