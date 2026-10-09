@@ -32,6 +32,13 @@ On a clean profile (or after removing `%USERPROFILE%\.Immich-desktop-client`):
 6. Upgrade path: install over an old version that has a `shelve` file; its entries must appear as non-own uploads
    (never deleted or replaced), and an old `config.yaml` directory must be moved aside, not crash the app.
 
+The checkable parts of this list are automated: `python tests/smoke/run_smoke.py` builds the exe from the spec, starts a
+throw-away Immich 3.1 in Docker, runs the exe in a temp profile (`USERPROFILE` is redirected, so your real profile and
+autostart entry are untouched) and checks version refusal, upload of existing files, single instance, add / edit /
+rename / delete with live delete, album reuse across restarts, and the shelve upgrade. Quit the installed app first
+(the single-instance port is machine-wide). Still manual: the installer, the tray menu and the Tk dialogs
+(*Start with Windows*, *Settings...*, the bulk-trash confirmation, *Quit*).
+
 ## Still undecided (see issue #1)
 
 Version numbering, whether to keep a VERSION-driven release workflow, and code signing / SmartScreen.

@@ -307,9 +307,9 @@ class Immich:
         response = self.__request("GET", "/albums", params={'isOwned': 'true', 'name': album_name})
         if response is None or not response.ok:
             raise ServerUnreachableError("could not list albums")
-        # the server filters too, but old servers ignore the filters, so match again here
+        # the server filters on isOwned=true (3.x does not echo the field back); match again in case it is present
         for album in response.json():
-            if album['albumName'] == album_name and album.get('isOwned'):
+            if album['albumName'] == album_name and album.get('isOwned', True):
                 return album['id']
         return None
 

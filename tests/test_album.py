@@ -25,3 +25,13 @@ def test_creates_album_when_none_owned_and_uses_its_id(api, tmp_path):
 
     assert len(api.created_albums) == 1
     assert api.album_targets == ["new-album"]
+
+
+def test_reuses_album_when_the_server_omits_isowned(api, tmp_path):
+    # Immich 3.1 filters on isOwned=true but does not echo the field back in the listing
+    api.albums = [{"id": "mine", "albumName": "laptop", "albumUsers": [{"role": "owner"}]}]
+    client = make(api, tmp_path)
+    client.created(str(make_photo(tmp_path)))
+
+    assert api.created_albums == []
+    assert api.album_targets == ["mine"]
