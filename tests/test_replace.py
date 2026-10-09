@@ -81,3 +81,14 @@ def test_modify_of_unrecorded_file_is_a_plain_upload(client, api, tmp_path):
     photo = make_photo(tmp_path)
     client.modify(str(photo))
     assert len(api.uploads) == 1 and api.deletes == []
+
+
+def test_failed_metadata_copy_keeps_the_old_asset_instead_of_trashing_it(client, api, tmp_path):
+    photo = uploaded(client, tmp_path)
+    photo.write_bytes(b"v2")
+    api.copy_status = 500
+
+    client.modify(str(photo))
+
+    assert api.deletes == []  # albums/favorite could not be carried over, so nothing is trashed
+    assert client.record.get(str(photo)).asset_id == "asset-2"

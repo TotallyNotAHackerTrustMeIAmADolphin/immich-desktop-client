@@ -36,3 +36,17 @@ def test_unreachable_server_is_a_transient_error_not_a_refusal(api, tmp_path):
     with pytest.raises(immich.ServerUnreachableError):
         build(tmp_path)
     assert not issubclass(immich.ServerUnreachableError, immich.UnsupportedServerError)
+
+
+def html_reply(status=404):
+    import fake_immich
+    reply = fake_immich.FakeResponse("<html>Not Found</html>", status)
+    reply.html = True
+    return reply
+
+
+def test_a_server_that_does_not_answer_like_immich_is_not_reported_as_too_old(api, tmp_path):
+    api.version_response = html_reply(404)  # e.g. URL without /api, or a proxy error page
+    with pytest.raises(immich.InvalidServerResponseError):
+        build(tmp_path)
+    assert not issubclass(immich.InvalidServerResponseError, immich.UnsupportedServerError)

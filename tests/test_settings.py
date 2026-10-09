@@ -76,3 +76,17 @@ def test_save_over_a_directory_named_config_yaml_moves_it_aside(tmp_path):
 
     assert (tmp_path / CONFIG_FILENAME).is_file()
     assert yaml.safe_load((tmp_path / CONFIG_FILENAME).read_text())["api"]["url"] == FORM["url"]
+
+
+def test_placeholder_config_prefills_an_empty_form():
+    from config import TEMPLATE
+    form = settings.form_from_config(yaml.safe_load(TEMPLATE))
+    assert form["url"] == "" and form["key"] == "" and form["directories"] == []
+
+
+def test_wrong_url_is_reported_as_such_not_as_an_old_server():
+    def wrong_url(host, key):
+        raise immich.InvalidServerResponseError("https://x answered HTTP 404; check that the URL ends in /api")
+
+    errors, _ = settings.validate_form(FORM, check_server=wrong_url)
+    assert errors and "/api" in errors[0] and "3.0.0" not in errors[0]

@@ -3,8 +3,9 @@ from pathlib import Path
 
 import yaml
 
-from config import CONFIG_FILENAME
-from immich import ServerUnreachableError, UnsupportedServerError, check_server_supported
+from config import CONFIG_FILENAME, is_placeholder_config
+from immich import (InvalidServerResponseError, ServerUnreachableError, UnsupportedServerError,
+                    check_server_supported)
 
 
 def config_from_form(form):
@@ -20,6 +21,8 @@ def config_from_form(form):
 
 
 def form_from_config(config):
+    if is_placeholder_config(config) and "<" in str(config):
+        config = {}  # the untouched example config: start from a blank form instead
     api = config.get("api") or {}
     watchdog = config.get("watchdog") or {}
     delete = config.get("delete") or {}
@@ -52,6 +55,8 @@ def validate_form(form, check_server=check_server_supported):
         check_server(form["url"].strip().rstrip("/"), form["key"].strip())
     except UnsupportedServerError as e:
         errors.append(f"This server is not supported: {e}. Immich 3.0.0 or newer is required.")
+    except InvalidServerResponseError as e:
+        errors.append(str(e))
     except ServerUnreachableError as e:
         warnings.append(f"The server could not be reached right now ({e}); its version was not checked.")
     return errors, warnings

@@ -44,6 +44,24 @@ def load_config(config_dir):
         return yaml.safe_load(file)
 
 
+def is_placeholder_config(config):
+    """True for a config that is empty or still holds the example's <PLACEHOLDER> values."""
+    api = (config or {}).get("api") or {}
+    url, key = str(api.get("url") or ""), str(api.get("key") or "")
+    return not url or not key or "<" in url or "<" in key
+
+
+def existing_directories(directories):
+    """The directories that are reachable right now (an unplugged drive is skipped, not fatal)."""
+    reachable = []
+    for directory in directories:
+        if Path(directory).is_dir():
+            reachable.append(directory)
+        else:
+            print(f"watched folder not reachable, not watching it this session: {directory}")
+    return reachable
+
+
 def write_template_config(config_dir):
     """Create the example config unless one already exists; return its path."""
     config_dir = Path(config_dir)

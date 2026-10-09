@@ -9,9 +9,11 @@ class FakeResponse:
         self._payload = payload
         self.status_code = status_code
         self.ok = status_code < 400
-        self.text = json.dumps(payload)
+        self.text = payload if isinstance(payload, str) else json.dumps(payload)
 
     def json(self):
+        if isinstance(self._payload, str) and getattr(self, "html", False):
+            raise ValueError("not json")
         return self._payload
 
 
@@ -27,7 +29,9 @@ class FakeImmichApi:
         self.upload_error = None  # (status_code, body) to simulate a failed upload
         self.version = {"major": 3, "minor": 1, "patch": 0}  # served by GET /server/version
         self.unreachable = False
+        self.version_response = None  # replace the whole /server/version reply (e.g. a 404 page)
         self.copies = []  # PUT /assets/copy payloads
+        self.copy_status = 204
         self.delete_status = 204
         self.deletes = []  # DELETE /assets payloads
         self.albums = []  # served by GET /albums
@@ -67,11 +71,13 @@ class FakeImmichApi:
             raise requests.exceptions.ConnectionError("server down")
         if method == "PUT" and url.endswith("/assets/copy"):
             self.copies.append(json.loads(data))
-            return FakeResponse({}, 204)
+            return FakeResponse({}, self.copy_status)
         if method == "DELETE" and url.endswith("/assets"):
             self.deletes.append(json.loads(data))
             return FakeResponse({}, self.delete_status)
         if method == "GET" and url.endswith("/server/version"):
+            if self.version_response is not None:
+                return self.version_response
             return FakeResponse(self.version)
         if method == "GET" and url.endswith("/albums"):
             return FakeResponse(self.albums)

@@ -21,6 +21,10 @@ class UnsupportedServerError(Exception):
     """The server is older than MINIMUM_SERVER_VERSION or reports no parseable version."""
 
 
+class InvalidServerResponseError(Exception):
+    """The address answered, but not like an Immich API (wrong URL, proxy error page, ...)."""
+
+
 class ServerUnreachableError(Exception):
     """The server could not be reached; a transient condition, not a refusal."""
 
@@ -51,8 +55,14 @@ def check_server_supported(immich_host, api_key):
         raise ServerUnreachableError(str(e)) from e
     if response.status_code >= 500:
         raise ServerUnreachableError(f"server answered {response.status_code}")
+    if not response.ok:
+        raise InvalidServerResponseError(
+            f"{immich_host} answered HTTP {response.status_code}; check that the URL ends in /api")
     try:
         payload = response.json()
+    except ValueError:
+        raise InvalidServerResponseError(f"{immich_host} did not answer like an Immich API; check the URL")
+    try:
         version = (payload['major'], payload['minor'], payload['patch'])
         if not all(isinstance(part, int) for part in version):
             raise ValueError
@@ -153,7 +163,8 @@ class Immich:
         new_id, status = uploaded
         if not entry.own_upload or status != 'created' or new_id == entry.asset_id:
             return  # never copy over or trash an asset this client did not create itself
-        self.__copy_asset_metadata(entry.asset_id, new_id)
+        if not self.__copy_asset_metadata(entry.asset_id, new_id):
+            return  # albums/favorite could not be carried over: keep the old asset rather than lose them
         self.__trash([entry.asset_id])
 
     def delete(self, file):
@@ -185,6 +196,14 @@ class Immich:
                 self.record.remove(entry.path)
             trashed += len(batch)
         return trashed
+
+    def move_folder(self, source, destination):
+        """A folder was moved or renamed: re-point every record entry below it, no server calls."""
+        source, destination = os.path.normpath(source), os.path.normpath(destination)
+        prefix = os.path.normcase(source) + os.sep
+        for entry in self.record.entries():
+            if os.path.normcase(entry.path).startswith(prefix):
+                self.move(entry.path, destination + entry.path[len(source):])
 
     def __forget_missing(self, entry):
         """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""
@@ -245,7 +264,9 @@ class Immich:
         payload = json.dumps({"sourceId": source_id, "targetId": target_id})
         response = self.__request("PUT", "/assets/copy", data=payload, json_body=True)
         if response is None or not response.ok:
-            print("could not carry albums/favorite over to the new asset")
+            print("could not carry albums/favorite over to the new asset; keeping the old asset")
+            return False
+        return True
 
     def __trash(self, asset_ids):
         """Move assets to the server's trash; True on success. Deliberately never sends force (see ADR 0001)."""
@@ -323,8 +344,14 @@ class Immich:
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""
-        path = os.path.normpath(path)
-        candidates = [root for root in self.__roots if path.startswith(root + os.sep)]
+        path = os.path.normcase(os.path.normpath(path))
+        candidates = []
+        for root in self.__roots:
+            prefix = os.path.normcase(root)
+            if not prefix.endswith(os.sep):
+                prefix += os.sep  # a drive root such as C:\ already ends in a separator
+            if path.startswith(prefix):
+                candidates.append(root)
         return max(candidates, key=len) if candidates else None
 
     @staticmethod

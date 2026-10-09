@@ -39,3 +39,17 @@ def test_template_is_written_once_and_never_overwrites(tmp_path):
     path.write_text("mine: true")
     write_template_config(tmp_path / "newdir")
     assert path.read_text() == "mine: true"
+
+
+def test_example_config_with_placeholders_counts_as_not_configured():
+    from config import TEMPLATE, is_placeholder_config
+    import yaml
+    assert is_placeholder_config(yaml.safe_load(TEMPLATE))
+    assert not is_placeholder_config({"api": {"key": "abc", "url": "https://immich.example/api"}})
+
+
+def test_existing_directories_filters_out_unreachable_ones(tmp_path):
+    from config import existing_directories
+    present = tmp_path / "here"
+    present.mkdir()
+    assert existing_directories([str(present), str(tmp_path / "gone")]) == [str(present)]
