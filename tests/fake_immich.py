@@ -25,6 +25,7 @@ class FakeImmichApi:
         self.version = {"major": 3, "minor": 1, "patch": 0}  # served by GET /server/version
         self.unreachable = False
         self.copies = []  # PUT /assets/copy payloads
+        self.delete_status = 204
         self.deletes = []  # DELETE /assets payloads
         self.albums = []  # served by GET /albums
         self.created_albums = []
@@ -50,7 +51,7 @@ class FakeImmichApi:
             return FakeResponse({}, 204)
         if method == "DELETE" and url.endswith("/assets"):
             self.deletes.append(json.loads(data))
-            return FakeResponse({}, 204)
+            return FakeResponse({}, self.delete_status)
         if method == "GET" and url.endswith("/server/version"):
             return FakeResponse(self.version)
         if method == "GET" and url.endswith("/albums"):

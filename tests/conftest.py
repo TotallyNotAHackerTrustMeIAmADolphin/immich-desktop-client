@@ -16,3 +16,9 @@ def api(monkeypatch):
 def client(api, tmp_path):
     return immich.Immich("http://immich.test/api", "key", album_name="test", album_id="album-1",
                          record_path=str(tmp_path / "record.sqlite"))
+
+
+@pytest.fixture
+def deleting_client(api, tmp_path):
+    return immich.Immich("http://immich.test/api", "key", album_name="test", album_id="album-1",
+                         record_path=str(tmp_path / "record.sqlite"), live_delete=True)

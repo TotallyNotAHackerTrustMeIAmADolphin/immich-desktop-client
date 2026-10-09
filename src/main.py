@@ -85,11 +85,12 @@ immich_host = config["api"]["url"]
 album_name = config["api"]["album"]
 api_key = config["api"]["key"]
 directories_to_watch = config["watchdog"]["directories"]
+delete_options = config.get("delete") or {}
 
 state = True
 
 try:
-    api = Immich(immich_host, api_key, album_name)
+    api = Immich(immich_host, api_key, album_name, live_delete=delete_options.get("live", False))
 except UnsupportedServerError as e:
     sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
 except ServerUnreachableError as e:

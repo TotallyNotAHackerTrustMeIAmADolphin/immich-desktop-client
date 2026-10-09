@@ -28,10 +28,11 @@ def is_media_file(path, media_file_extensions):
 
 
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None, live_delete=False):
         self.__immichHost = immich_host
         self.__apiKey = api_key
         self.__roots = []
+        self.__live_delete = live_delete
 
         if record_path is None:
             data_dir = Path.home() / ".Immich-desktop-client"
@@ -145,6 +146,12 @@ class Immich:
             return image_id['id'], image_id['status']
 
     def delete(self, file):
+        """Live delete: a watched file disappeared while the app was running."""
+        entry = self.record.get(file)
+        if entry is None:
+            return
+        if self.__live_delete and entry.own_upload and not self.__trash([entry.asset_id]):
+            return  # trash failed: keep the entry rather than lose track of the asset
         self.record.remove(file)
 
     def move(self, source, destination):
@@ -166,15 +173,17 @@ class Immich:
             print(f"could not carry albums/favorite over to the new asset: {e}")
 
     def __trash(self, asset_ids):
-        """Move assets to the server's trash. Deliberately never sends force (see ADR 0001)."""
+        """Move assets to the server's trash; True on success. Deliberately never sends force (see ADR 0001)."""
         headers = {'Content-Type': 'application/json', 'x-api-key': self.__apiKey}
         payload = json.dumps({"ids": list(asset_ids)})
         try:
             response = requests.request("DELETE", self.__immichHost + "/assets", headers=headers, data=payload)
             if not response.ok:
                 print(f"could not trash {asset_ids}: {response.status_code}")
+            return response.ok
         except requests.exceptions.RequestException as e:
             print(f"could not trash {asset_ids}: {e}")
+            return False
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""
