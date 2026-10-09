@@ -11,6 +11,17 @@ from time import sleep
 import requests
 
 
+MINIMUM_SERVER_VERSION = (3, 0, 0)
+
+
+class UnsupportedServerError(Exception):
+    """The server is older than MINIMUM_SERVER_VERSION or reports no parseable version."""
+
+
+class ServerUnreachableError(Exception):
+    """The server could not be reached; a transient condition, not a refusal."""
+
+
 def is_media_file(path, media_file_extensions):
     return str(path).lower().endswith(media_file_extensions)
 
@@ -24,6 +35,8 @@ class Immich:
             self.__shelve_path = str(Path.home()) + "/.Immich-desktop-client/shelve"
         else:
             self.__shelve_path = shelve_path
+
+        self.check_server_supported()
 
         if album_name is None:
             self.album_name = socket.gethostname()
@@ -276,6 +289,24 @@ class Immich:
     def __iso_timestamp(timestamp: float):
         # Immich 3.x rejects dates without a UTC offset
         return datetime.fromtimestamp(timestamp).astimezone().isoformat()
+
+    def check_server_supported(self):
+        headers = {'Accept': 'application/json', 'x-api-key': self.__apiKey}
+        try:
+            response = requests.request("GET", self.__immichHost + "/server/version", headers=headers)
+        except requests.exceptions.RequestException as e:
+            raise ServerUnreachableError(str(e)) from e
+
+        try:
+            payload = response.json()
+            version = (payload['major'], payload['minor'], payload['patch'])
+            if not all(isinstance(part, int) for part in version):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            raise UnsupportedServerError("server did not report a parseable version")
+        if version < MINIMUM_SERVER_VERSION:
+            raise UnsupportedServerError(
+                "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
 
     def test_connection(self):
         headers = {

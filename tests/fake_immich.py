@@ -1,6 +1,8 @@
 """A minimal in-memory stand-in for the Immich REST API, patched over `requests`."""
 import json
 
+import requests
+
 
 class FakeResponse:
     def __init__(self, payload, status_code=200):
@@ -19,6 +21,8 @@ class FakeImmichApi:
         self.album_adds = []  # asset ids added to albums
         self.next_status = "created"
         self.upload_error = None  # (status_code, body) to simulate a failed upload
+        self.version = {"major": 3, "minor": 1, "patch": 0}  # served by GET /server/version
+        self.unreachable = False
         self.albums = []  # served by GET /albums
         self.created_albums = []
         self._counter = 0
@@ -35,6 +39,10 @@ class FakeImmichApi:
         if method == "PUT" and "/albums/" in url and url.endswith("/assets"):
             self.album_adds.extend(json.loads(data)["ids"])
             return FakeResponse([{"success": True}])
+        if self.unreachable:
+            raise requests.exceptions.ConnectionError("server down")
+        if method == "GET" and url.endswith("/server/version"):
+            return FakeResponse(self.version)
         if method == "GET" and url.endswith("/albums"):
             return FakeResponse(self.albums)
         if method == "POST" and url.endswith("/albums"):

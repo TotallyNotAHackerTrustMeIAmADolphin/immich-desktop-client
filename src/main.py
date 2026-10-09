@@ -1,4 +1,5 @@
 import mimetypes
+import sys
 from pathlib import Path
 
 import yaml
@@ -7,7 +8,7 @@ from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from immich import Immich, is_media_file
+from immich import Immich, ServerUnreachableError, UnsupportedServerError, is_media_file
 
 
 def on_clicked(icon, item):
@@ -75,7 +76,12 @@ directories_to_watch = config["watchdog"]["directories"]
 
 state = True
 
-api = Immich(immich_host, api_key, album_name)
+try:
+    api = Immich(immich_host, api_key, album_name)
+except UnsupportedServerError as e:
+    sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+except ServerUnreachableError as e:
+    sys.exit(f"Could not reach the Immich server: {e}")
 api.test_connection()
 api.print_shelve()
 api.upload_all_images(directories_to_watch, media_file_extensions)
