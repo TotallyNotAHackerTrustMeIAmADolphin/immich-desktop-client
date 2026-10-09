@@ -2,7 +2,7 @@ import immich
 
 
 def make(api, tmp_path):
-    return immich.Immich("http://immich.test/api", "key", album_name="laptop", shelve_path=str(tmp_path / "s"))
+    return immich.Immich("http://immich.test/api", "key", album_name="laptop", record_path=str(tmp_path / "r.sqlite"))
 
 
 def test_finds_own_album_by_name_ignoring_shared_namesakes(api, tmp_path):

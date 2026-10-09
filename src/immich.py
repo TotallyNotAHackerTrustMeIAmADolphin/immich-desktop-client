@@ -1,8 +1,6 @@
-import dbm
 import hashlib
 import json
 import os.path
-import shelve
 import socket
 from datetime import datetime
 from pathlib import Path
@@ -10,8 +8,11 @@ from time import sleep
 
 import requests
 
+from record import UploadRecord
+
 
 MINIMUM_SERVER_VERSION = (3, 0, 0)
+OWNERSHIP_HINT_KEY = "immich-desktop-client"
 
 
 class UnsupportedServerError(Exception):
@@ -27,14 +28,13 @@ def is_media_file(path, media_file_extensions):
 
 
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, shelve_path=None):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None):
         self.__immichHost = immich_host
         self.__apiKey = api_key
 
-        if shelve_path is None:
-            self.__shelve_path = str(Path.home()) + "/.Immich-desktop-client/shelve"
-        else:
-            self.__shelve_path = shelve_path
+        if record_path is None:
+            record_path = Path.home() / ".Immich-desktop-client" / "record.sqlite"
+        self.record = UploadRecord(record_path)
 
         self.check_server_supported()
 
@@ -49,31 +49,18 @@ class Immich:
             self.__album_id = album_id
 
     def upload_all_images(self, directories, media_file_extensions):
-        try:
-            with shelve.open(self.__shelve_path, flag='r') as db:
-                print("catch up with files already stored in shelve")
-                data = db.keys()
-                for key in data:
-                    if os.path.isfile(key):
-                        if self.__get_sha1(key) != db[key][1]:
-                            self.created(str(key))
-                    else:
-                        self.delete(key)
+        print("catch up with files already in the upload record")
+        for entry in self.record.entries():
+            # files missing from disk are deliberately left alone: absence is ambiguous (unmounted drive)
+            if os.path.isfile(entry.path) and self.__get_sha1(entry.path) != entry.checksum:
+                self.created(entry.path)
 
-                print("uploading new files")
-                matching_files = []
-                for directory in directories:
-                    for filename in os.listdir(directory):
-                        if is_media_file(filename, media_file_extensions):
-                            matching_files.append(os.path.join(directory, filename))
-
-                for file in matching_files:
-                    if file not in db:
-                        self.created(file)
-
-
-        except dbm.error:
-            print("cant open non-existing shelve")
+        print("uploading new files")
+        for directory in directories:
+            for filename in os.listdir(directory):
+                file = os.path.join(directory, filename)
+                if is_media_file(filename, media_file_extensions) and self.record.get(file) is None:
+                    self.created(file)
 
     def created(self, file):
         try:
@@ -82,16 +69,18 @@ class Immich:
             print("could not create file")
             return
 
+        checksum = self.__get_sha1(file)
         headers = {
             'Accept': 'application/json',
             'x-api-key': self.__apiKey,
-            'x-Immich-checksum': self.__get_sha1(file)
+            'x-Immich-checksum': checksum
         }
 
         data = {
             'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
             'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
             'isFavorite': 'false',
+            'metadata': json.dumps([{'key': OWNERSHIP_HINT_KEY, 'value': {'checksum': checksum}}]),
         }
 
         files = {
@@ -107,7 +96,7 @@ class Immich:
                 return
             image_id = json.loads(response.text)
             print("status: " + image_id['status'])
-            self.__save_image_to_shelve(image_id['id'], file)
+            self.record.upsert(file, image_id['id'], checksum, own_upload=image_id['status'] == 'created')
             self.__add_asset_to_album(image_id['id'])
             print("saved image successfully: " + str(response.text))
 
@@ -152,10 +141,7 @@ class Immich:
     #                print(response.text)
 
     def delete(self, file):
-        try:
-            self.__delete_image_from_shelve(file)
-        except KeyError:
-            print("trying to delete non-uploaded file")
+        self.record.remove(file)
 
     # TODO create Option for deleting images on server too
     #    try:
@@ -182,9 +168,11 @@ class Immich:
     #            print(response.text)
     #            self.__delete_image_from_shelve(file)
     def move(self, source, destination):
-        asset_id = self.__get_image_id(source)
-        self.__delete_image_from_shelve(source)
-        self.__save_image_to_shelve(asset_id, destination)
+        entry = self.record.get(source)
+        if entry is None:
+            return
+        self.record.remove(source)
+        self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload)
 
     def __create_album(self):
         payload = json.dumps({
@@ -235,32 +223,6 @@ class Immich:
                                     headers=headers, data=payload)
         print(response.json())
         print("successfully added asset to album")
-
-    def __save_image_to_shelve(self, asset_id, file):
-        with shelve.open(self.__shelve_path, flag='c', writeback=True) as images:
-            images[file] = [asset_id, self.__get_sha1(file)]
-            print("added to shelve: " + str(file) + str(images[file]))
-
-    def __get_image_id(self, file):
-        with shelve.open(self.__shelve_path, flag='r') as images:
-            image_id = images[file][0]
-            return image_id
-
-    def __delete_image_from_shelve(self, file):
-        with shelve.open(self.__shelve_path, flag='c', writeback=True) as images:
-            del images[file]
-
-    def print_shelve(self):
-        try:
-            with shelve.open(self.__shelve_path, flag='r') as db:
-                data = db.keys()
-
-                print("Start of stored data")
-                for key in data:
-                    print(key, db[key])
-                print("End of stored data")
-        except dbm.error:
-            print("cant export non-existing shelve")
 
     @staticmethod
     def __get_sha1(file: str):

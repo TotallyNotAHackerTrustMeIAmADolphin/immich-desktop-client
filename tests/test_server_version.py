@@ -5,7 +5,7 @@ import immich
 
 def build(tmp_path):
     return immich.Immich("http://immich.test/api", "key", album_name="a", album_id="1",
-                         shelve_path=str(tmp_path / "s"))
+                         record_path=str(tmp_path / "r.sqlite"))
 
 
 @pytest.mark.parametrize("version", [

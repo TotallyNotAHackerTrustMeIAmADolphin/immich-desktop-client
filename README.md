@@ -13,7 +13,7 @@ desktop to your Immich server.
 - **Automated Media Upload**: Scans specified directories for media files and uploads new or modified files to your
   Immich server
 - **Uploads to Album**: Automatically creates an album and puts all the images in it
-- **Local Shelve Storage**: Tracks uploaded files using local shelve storage and SHA-1 hashes to avoid duplicate uploads
+- **Local Upload Record**: Tracks uploaded files in a local SQLite database with SHA-1 hashes to avoid duplicate uploads
 - **Checksum Validation**: Ensures data integrity with SHA-1 checksum verification during uploads
 - **Cross-Platform**: _should_ be compatible with Windows, macOS, and Linux (only tested on Windows 11)
 

@@ -84,7 +84,6 @@ except UnsupportedServerError as e:
 except ServerUnreachableError as e:
     sys.exit(f"Could not reach the Immich server: {e}")
 api.test_connection()
-api.print_shelve()
 api.upload_all_images(directories_to_watch, media_file_extensions)
 
 # Create observer and event handler

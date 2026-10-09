@@ -15,4 +15,4 @@ def api(monkeypatch):
 @pytest.fixture
 def client(api, tmp_path):
     return immich.Immich("http://immich.test/api", "key", album_name="test", album_id="album-1",
-                         shelve_path=str(tmp_path / "shelve"))
+                         record_path=str(tmp_path / "record.sqlite"))
