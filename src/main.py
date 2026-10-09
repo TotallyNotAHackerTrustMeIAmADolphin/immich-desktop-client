@@ -2,12 +2,12 @@ import mimetypes
 import sys
 from pathlib import Path
 
-import yaml
 from PIL import Image
 from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from config import default_config_dir, load_config, write_template_config
 from immich import Immich, ServerUnreachableError, UnsupportedServerError, is_media_file
 
 
@@ -64,8 +64,9 @@ class MyHandler(FileSystemEventHandler):
 
 
 # Load Config
-with open(str(Path.home()) + '/.Immich-desktop-client/config.yaml', 'rt') as file:
-    config = yaml.safe_load(file)
+config = load_config(default_config_dir())
+if config is None:
+    sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} and start again.")
 
 media_file_extensions = get_extensions_for_type()
 

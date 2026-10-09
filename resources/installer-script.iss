@@ -50,7 +50,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "example-config.yaml"; DestDir: "{app}\config.yaml"; Flags: ignoreversion
+Source: "example-config.yaml"; DestDir: "{%USERPROFILE}\.Immich-desktop-client"; DestName: "config.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "icon.ico"; DestDir: "{%USERPROFILE}\.Immich-desktop-client"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
