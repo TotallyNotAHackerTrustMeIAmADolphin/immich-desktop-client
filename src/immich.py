@@ -4,7 +4,6 @@ import json
 import os.path
 import shelve
 import socket
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from time import sleep
@@ -12,8 +11,12 @@ from time import sleep
 import requests
 
 
+def is_media_file(path, media_file_extensions):
+    return str(path).lower().endswith(media_file_extensions)
+
+
 class Immich:
-    def __init__(self, immich_host, api_key, album_name=None, album_id=None, device_id=None, shelve_path=None):
+    def __init__(self, immich_host, api_key, album_name=None, album_id=None, shelve_path=None):
         self.__immichHost = immich_host
         self.__apiKey = api_key
 
@@ -21,11 +24,6 @@ class Immich:
             self.__shelve_path = str(Path.home()) + "/.Immich-desktop-client/shelve"
         else:
             self.__shelve_path = shelve_path
-
-        if device_id is None:
-            self.__uuid = self.__get_uuid()
-        else:
-            self.__uuid = device_id
 
         if album_name is None:
             self.album_name = socket.gethostname()
@@ -53,7 +51,7 @@ class Immich:
                 matching_files = []
                 for directory in directories:
                     for filename in os.listdir(directory):
-                        if filename.endswith(media_file_extensions):
+                        if is_media_file(filename, media_file_extensions):
                             matching_files.append(os.path.join(directory, filename))
 
                 for file in matching_files:
@@ -78,8 +76,6 @@ class Immich:
         }
 
         data = {
-            'deviceAssetId': f"{file}-{stats.st_mtime}",
-            'deviceId': self.__uuid,
             'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
             'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
             'isFavorite': 'false',
@@ -93,8 +89,11 @@ class Immich:
         except Exception as e:
             print(e)
         else:
+            if not response.ok:
+                print(f"upload of {file} failed: {response.status_code} {response.text}")
+                return
             image_id = json.loads(response.text)
-            print("satus: " + image_id['status'])
+            print("status: " + image_id['status'])
             self.__save_image_to_shelve(image_id['id'], file)
             self.__add_asset_to_album(image_id['id'])
             print("saved image successfully: " + str(response.text))
@@ -186,7 +185,7 @@ class Immich:
         }
         response = requests.request("POST", self.__immichHost + "/albums", headers=headers, data=payload)
         print("Successfully created album " + str(response.json()))
-        return json.loads(response.text)['asset_id']
+        return json.loads(response.text)['id']
 
     def __get_album_id(self):
         headers = {
@@ -199,7 +198,7 @@ class Immich:
 
         album_id = None
         for album in response:
-            if album['albumName'] == self.album_name:
+            if album['albumName'] == self.album_name and album.get('isOwned'):
                 album_id = album['id']
         if album_id is None:
             print("no album found ... creating new one")
@@ -277,10 +276,6 @@ class Immich:
     def __iso_timestamp(timestamp: float):
         # Immich 3.x rejects dates without a UTC offset
         return datetime.fromtimestamp(timestamp).astimezone().isoformat()
-
-    @staticmethod
-    def __get_uuid():
-        return str(subprocess.check_output('wmic csproduct get uuid')).split('\\r\\n')[1].strip('\\r').strip()
 
     def test_connection(self):
         headers = {

@@ -7,7 +7,7 @@ from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from immich import Immich
+from immich import Immich, is_media_file
 
 
 def on_clicked(icon, item):
@@ -35,15 +35,21 @@ def get_extensions_for_type():
 class MyHandler(FileSystemEventHandler):
     def on_created(self, event):
         global state
-        if state and not event.is_directory and event.src_path.endswith(media_file_extensions):
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
             print(f"File {event.src_path} has been created!")
-            api.created(event.src_path)
+            try:
+                api.created(event.src_path)
+            except Exception as e:  # an escaping exception would silently end the watcher thread
+                print(f"error handling creation of {event.src_path}: {e!r}")
 
     def on_deleted(self, event):
         global state
-        if state and not event.is_directory and event.src_path.endswith(media_file_extensions):
+        if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
             print(f"File {event.src_path} has been deleted!")
-            api.delete(event.src_path)
+            try:
+                api.delete(event.src_path)
+            except Exception as e:
+                print(f"error handling deletion of {event.src_path}: {e!r}")
 
     # TODO: make these event handlers work
     #   def on_moved(self, event):

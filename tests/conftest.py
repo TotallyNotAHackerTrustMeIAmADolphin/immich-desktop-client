@@ -14,6 +14,5 @@ def api(monkeypatch):
 
 @pytest.fixture
 def client(api, tmp_path):
-    # device_id and album_id given explicitly so construction makes no network or wmic calls
     return immich.Immich("http://immich.test/api", "key", album_name="test", album_id="album-1",
-                         device_id="device-1", shelve_path=str(tmp_path / "shelve"))
+                         shelve_path=str(tmp_path / "shelve"))
