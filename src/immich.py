@@ -25,6 +25,44 @@ class ServerUnreachableError(Exception):
     """The server could not be reached; a transient condition, not a refusal."""
 
 
+def with_retries(call):
+    """Retry on network errors and 5xx responses with exponential backoff."""
+    delay = RETRY_BASE_DELAY_SECONDS
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        last_attempt = attempt == RETRY_ATTEMPTS
+        try:
+            response = call()
+        except requests.exceptions.RequestException:
+            if last_attempt:
+                raise
+        else:
+            if response.status_code < 500 or last_attempt:
+                return response
+        sleep(delay)
+        delay *= 2
+
+
+def check_server_supported(immich_host, api_key):
+    """Raise UnsupportedServerError / ServerUnreachableError unless the server meets the version floor."""
+    headers = {'Accept': 'application/json', 'x-api-key': api_key}
+    try:
+        response = with_retries(lambda: requests.request("GET", immich_host + "/server/version", headers=headers))
+    except requests.exceptions.RequestException as e:
+        raise ServerUnreachableError(str(e)) from e
+    if response.status_code >= 500:
+        raise ServerUnreachableError(f"server answered {response.status_code}")
+    try:
+        payload = response.json()
+        version = (payload['major'], payload['minor'], payload['patch'])
+        if not all(isinstance(part, int) for part in version):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise UnsupportedServerError("server did not report a parseable version")
+    if version < MINIMUM_SERVER_VERSION:
+        raise UnsupportedServerError(
+            "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
+
+
 def is_media_file(path, media_file_extensions):
     return str(path).lower().endswith(media_file_extensions)
 
@@ -185,7 +223,7 @@ class Immich:
                                      files={'assetData': asset_data})
 
         try:
-            response = self.__with_retries(post)
+            response = with_retries(post)
         except (requests.exceptions.RequestException, OSError) as e:
             print(f"upload of {file} failed: {e}")
             return None
@@ -261,19 +299,7 @@ class Immich:
             print(f"could not add asset to album {album_name}")
 
     def check_server_supported(self):
-        response = self.__request("GET", "/server/version")
-        if response is None:
-            raise ServerUnreachableError("could not fetch the server version")
-        try:
-            payload = response.json()
-            version = (payload['major'], payload['minor'], payload['patch'])
-            if not all(isinstance(part, int) for part in version):
-                raise ValueError
-        except (ValueError, KeyError, TypeError):
-            raise UnsupportedServerError("server did not report a parseable version")
-        if version < MINIMUM_SERVER_VERSION:
-            raise UnsupportedServerError(
-                "server version %d.%d.%d is older than the required %d.%d.%d" % (version + MINIMUM_SERVER_VERSION))
+        check_server_supported(self.__immichHost, self.__apiKey)
 
     def test_connection(self):
         response = self.__request("POST", "/auth/validateToken")
@@ -289,28 +315,11 @@ class Immich:
         if json_body:
             headers['Content-Type'] = 'application/json'
         try:
-            return self.__with_retries(lambda: requests.request(
+            return with_retries(lambda: requests.request(
                 method, self.__immichHost + path, headers=headers, data=data, params=params))
         except requests.exceptions.RequestException as e:
             print(f"{method} {path} failed: {e}")
             return None
-
-    @staticmethod
-    def __with_retries(call):
-        """Retry on network errors and 5xx responses with exponential backoff."""
-        delay = RETRY_BASE_DELAY_SECONDS
-        for attempt in range(1, RETRY_ATTEMPTS + 1):
-            last_attempt = attempt == RETRY_ATTEMPTS
-            try:
-                response = call()
-            except requests.exceptions.RequestException:
-                if last_attempt:
-                    raise
-            else:
-                if response.status_code < 500 or last_attempt:
-                    return response
-            sleep(delay)
-            delay *= 2
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""

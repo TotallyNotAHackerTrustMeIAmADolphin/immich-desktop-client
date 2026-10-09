@@ -84,7 +84,16 @@ if instance_lock is None:
 # Load Config
 config = load_config(default_config_dir())
 if config is None:
-    sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} and start again.")
+    # first run: ask for the settings in a window; without a display fall back to the config template
+    try:
+        from settings_dialog import open_settings
+        if open_settings():
+            config = load_config(default_config_dir())
+    except ImportError:
+        pass
+    if config is None:
+        sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
+                 f"or start the app again to open the settings window.")
 
 media_file_extensions = get_extensions_for_type()
 
@@ -143,6 +152,11 @@ def open_config(tray_icon, tray_item):
         print(f"config file: {path}")
 
 
+def open_settings_window(tray_icon, tray_item):
+    from settings_dialog import open_settings
+    open_settings()
+
+
 def delete_all_uploads(tray_icon, tray_item):
     import tkinter
     from tkinter import messagebox
@@ -182,6 +196,7 @@ icon('Immich Desktop Client', load_icon(), menu=menu(
         checked=lambda item: state),
     item('Start with Windows', toggle_autostart, checked=lambda item: autostart.is_enabled(),
          visible=sys.platform == 'win32' and getattr(sys, 'frozen', False)),
+    item('Settings...', open_settings_window),
     item('Open config file', open_config),
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
