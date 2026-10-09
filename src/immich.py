@@ -80,8 +80,8 @@ class Immich:
         data = {
             'deviceAssetId': f"{file}-{stats.st_mtime}",
             'deviceId': self.__uuid,
-            'fileCreatedAt': datetime.fromtimestamp(stats.st_mtime),
-            'fileModifiedAt': datetime.fromtimestamp(stats.st_mtime),
+            'fileCreatedAt': self.__iso_timestamp(stats.st_mtime),
+            'fileModifiedAt': self.__iso_timestamp(stats.st_mtime),
             'isFavorite': 'false',
         }
 
@@ -272,6 +272,11 @@ class Immich:
         else:
             print("Error: could not get file stats since could not find file")
             raise FileNotFoundError
+
+    @staticmethod
+    def __iso_timestamp(timestamp: float):
+        # Immich 3.x rejects dates without a UTC offset
+        return datetime.fromtimestamp(timestamp).astimezone().isoformat()
 
     @staticmethod
     def __get_uuid():
