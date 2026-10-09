@@ -14,6 +14,7 @@ MINIMUM_SERVER_VERSION = (3, 0, 0)
 OWNERSHIP_HINT_KEY = "immich-desktop-client"
 RETRY_ATTEMPTS = 4
 RETRY_BASE_DELAY_SECONDS = 1
+TRASH_BATCH_SIZE = 100
 
 
 class UnsupportedServerError(Exception):
@@ -133,6 +134,19 @@ class Immich:
         self.record.remove(source)
         self.record.upsert(destination, entry.asset_id, entry.checksum, entry.own_upload,
                            root=self.__root_for(destination) or entry.root)
+
+    def delete_all_own_uploads(self):
+        """Move every own upload to the server's trash. Returns how many were trashed."""
+        own = [entry for entry in self.record.entries() if entry.own_upload]
+        trashed = 0
+        for start in range(0, len(own), TRASH_BATCH_SIZE):
+            batch = own[start:start + TRASH_BATCH_SIZE]
+            if not self.__trash([entry.asset_id for entry in batch]):
+                continue  # keep these entries so nothing is forgotten that is still on the server
+            for entry in batch:
+                self.record.remove(entry.path)
+            trashed += len(batch)
+        return trashed
 
     def __forget_missing(self, entry):
         """Catch-up delete: the record lists a file that is gone although its watched root is reachable."""

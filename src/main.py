@@ -142,6 +142,24 @@ def open_config(tray_icon, tray_item):
         print(f"config file: {path}")
 
 
+def delete_all_uploads(tray_icon, tray_item):
+    import tkinter
+    from tkinter import messagebox
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    confirmed = messagebox.askyesno(
+        "Immich Desktop Client",
+        "Move every file this app uploaded to the Immich trash?\n\n"
+        "Files that already existed on the server are not touched. "
+        "Trashed items can be restored in Immich until its trash is emptied.",
+        parent=root)
+    if confirmed:
+        trashed = api.delete_all_own_uploads()
+        messagebox.showinfo("Immich Desktop Client", f"Moved {trashed} uploads to the Immich trash.", parent=root)
+    root.destroy()
+
+
 def quit_app(tray_icon, tray_item):
     observer.stop()
     tray_icon.stop()
@@ -155,6 +173,7 @@ icon('Immich Desktop Client', load_icon(), menu=menu(
         on_clicked,
         checked=lambda item: state),
     item('Open config file', open_config),
+    item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
 )).run()
 instance_lock.release()
