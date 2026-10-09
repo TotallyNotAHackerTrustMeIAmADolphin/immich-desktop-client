@@ -9,6 +9,7 @@ from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+import autostart
 from single_instance import acquire
 from config import default_config_dir, load_config, write_template_config
 from immich import Immich, ServerUnreachableError, UnsupportedServerError, is_media_file
@@ -160,6 +161,13 @@ def delete_all_uploads(tray_icon, tray_item):
     root.destroy()
 
 
+def toggle_autostart(tray_icon, tray_item):
+    if autostart.is_enabled():
+        autostart.disable()
+    else:
+        autostart.enable(sys.executable)
+
+
 def quit_app(tray_icon, tray_item):
     observer.stop()
     tray_icon.stop()
@@ -172,6 +180,8 @@ icon('Immich Desktop Client', load_icon(), menu=menu(
         'Sync directories to Immich',
         on_clicked,
         checked=lambda item: state),
+    item('Start with Windows', toggle_autostart, checked=lambda item: autostart.is_enabled(),
+         visible=sys.platform == 'win32' and getattr(sys, 'frozen', False)),
     item('Open config file', open_config),
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
