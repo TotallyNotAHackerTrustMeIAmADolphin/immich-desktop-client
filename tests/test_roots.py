@@ -1,3 +1,4 @@
+import os
 import shutil
 
 from test_upload import make_photo
@@ -75,10 +76,11 @@ def test_move_updates_the_record_path_in_place_without_server_calls(client, api,
 
 
 def test_drive_style_root_ending_in_a_separator_still_matches(client, api, tmp_path):
-    client.upload_all_images(["/"], (".jpg",))  # normalises to "/", i.e. like "C:\" on Windows
+    drive_root = tmp_path.anchor  # "/" on POSIX, "C:\\" on Windows
+    client.upload_all_images([drive_root], (".jpg",))
     photo = make_photo(tmp_path, "a.jpg")
     client.created(str(photo))
-    assert client.record.get(str(photo)).root == "/"
+    assert client.record.get(str(photo)).root == os.path.normpath(drive_root)
 
 
 def test_root_matching_ignores_case_where_the_filesystem_does(client, api, tmp_path, monkeypatch):
