@@ -45,6 +45,10 @@ class GuiRunner:
                 continue
             self.__execute(task, name)
 
+    @property
+    def running(self):
+        return self.__running
+
     def stop(self):
         self.__running = False
 
