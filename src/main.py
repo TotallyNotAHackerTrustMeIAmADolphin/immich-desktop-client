@@ -14,6 +14,7 @@ from watchdog.observers import Observer
 
 import applog
 import autostart
+from fatal import die
 from gui_runner import GuiRunner
 from single_instance import acquire
 from config import (default_config_dir, existing_directories, is_placeholder_config, load_config,
@@ -89,7 +90,7 @@ class MyHandler(FileSystemEventHandler):
 
 instance_lock = acquire()
 if instance_lock is None:
-    sys.exit("Immich Desktop Client is already running.")
+    die("Immich Desktop Client is already running.")
 
 # Everything from here on goes to the log file: the windowed exe has no console to print to.
 # Only the instance holding the lock logs, so two processes never rotate the same file.
@@ -107,7 +108,7 @@ if config is None or is_placeholder_config(config):
     except Exception as e:  # no tkinter, or no display (headless session)
         log.warning(f"could not show the settings window: {e!r}")
     if config is None or is_placeholder_config(config):
-        sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
+        die(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
                  f"or start the app again to open the settings window.")
 
 media_file_extensions = get_extensions_for_type()
@@ -136,16 +137,16 @@ for attempt in range(1, STARTUP_ATTEMPTS + 1):
                      album_by_year=config["api"].get("album_by_year", False))
         break
     except UnsupportedServerError as e:
-        sys.exit(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+        die(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
     except InvalidServerResponseError as e:
-        sys.exit(f"Refusing to start: {e}")
+        die(f"Refusing to start: {e}")
     except ServerUnreachableError as e:
         if attempt == STARTUP_ATTEMPTS:
-            sys.exit(f"Could not reach the Immich server: {e}")
+            die(f"Could not reach the Immich server: {e}")
         log.warning(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
         sleep(30)
 if api.test_connection() in (401, 403):
-    sys.exit("The Immich server rejected the API key. Open the settings and check it.")
+    die("The Immich server rejected the API key. Open the settings and check it.")
 api.upload_all_images(directories_to_watch, media_file_extensions)
 
 # Create observer and event handler

@@ -149,7 +149,9 @@ class App:
             f"  directories:\n  - {Path(directory).as_posix()}\ndelete:\n  live: {str(live).lower()}\n  catch_up: false\n")
 
     def start(self):
-        env = {**os.environ, "USERPROFILE": str(self.profile), "HOME": str(self.profile)}
+        # NO_DIALOGS: a fatal-error window would block the exit these checks wait for
+        env = {**os.environ, "USERPROFILE": str(self.profile), "HOME": str(self.profile),
+               "IMMICH_DESKTOP_CLIENT_NO_DIALOGS": "1"}
         self.proc = subprocess.Popen([str(self.exe)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return self.proc
 
