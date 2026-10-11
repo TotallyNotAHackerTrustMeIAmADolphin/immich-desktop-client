@@ -10,6 +10,7 @@ from time import sleep
 import requests
 
 from record import UploadRecord, migrate_legacy_shelve
+from status import Status
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +83,8 @@ def is_media_file(path, media_file_extensions):
 
 class Immich:
     def __init__(self, immich_host, api_key, album_name=None, album_id=None, record_path=None,
-                 live_delete=False, catch_up_delete=False, recursive=True, album_by_year=False):
+                 live_delete=False, catch_up_delete=False, recursive=True, album_by_year=False, status=None):
+        self.status = status if status is not None else Status()
         self.__immichHost = immich_host
         self.__apiKey = api_key
         self.__roots = []
@@ -111,7 +113,13 @@ class Immich:
 
     def upload_all_images(self, directories, media_file_extensions):
         self.__roots = [os.path.normpath(directory) for directory in directories]
+        self.status.scan_started()
+        try:
+            self.__catch_up(media_file_extensions)
+        finally:
+            self.status.scan_finished()
 
+    def __catch_up(self, media_file_extensions):
         log.info("catch up with files already in the upload record")
         empty_roots = set()
         for entry in self.record.entries():
@@ -119,6 +127,7 @@ class Immich:
             if root is None or root not in self.__roots:
                 continue  # root removed from the config: its entries stay untouched
             if not os.path.isdir(root):
+                self.status.root_skipped(root)
                 continue  # root currently unreachable (unmounted drive, offline share): skip, never delete
             if entry.root is None:
                 self.record.set_root(entry.path, root)
@@ -132,13 +141,17 @@ class Immich:
                     self.__forget_missing(entry)
 
         log.info("uploading new files")
+        new_files = []
         for root in self.__roots:
             if not os.path.isdir(root):
                 log.warning(f"skipping unreachable watched root {root}")
+                self.status.root_skipped(root)
                 continue
-            for file in self.__media_files(root, media_file_extensions):
-                if self.record.get(file) is None:
-                    self.created(file)
+            new_files.extend(file for file in self.__media_files(root, media_file_extensions)
+                             if self.record.get(file) is None)
+        self.status.queue(len(new_files))  # known up front so the progress can say "n of m"
+        for file in new_files:
+            self.created(file)
 
     def __media_files(self, root, media_file_extensions):
         if self.__recursive:
@@ -235,14 +248,17 @@ class Immich:
 
     def __upload(self, file):
         """Upload a file and record it. Returns (asset_id, status), or None if the upload failed."""
+        self.status.upload_started(file)
         try:
             stats = self.__get_file_stats(file)
         except FileNotFoundError:
             log.warning(f"could not read {file}: it disappeared before it could be uploaded")
+            self.status.upload_failed(file, "the file disappeared before it could be uploaded")
             return None
 
         checksum = self.__get_sha1(file)
         if checksum is None:
+            self.status.upload_failed(file, "the file could not be read")
             return None
         headers = {
             'Accept': 'application/json',
@@ -265,9 +281,13 @@ class Immich:
             response = with_retries(post)
         except (requests.exceptions.RequestException, OSError) as e:
             log.warning(f"upload of {file} failed: {e}")
+            self.status.server_unreachable()
+            self.status.upload_failed(file, f"server not reachable: {e}")
             return None
+        self.__note_response(response)
         if not response.ok:
             log.warning(f"upload of {file} failed: {response.status_code} {response.text}")
+            self.status.upload_failed(file, f"server answered HTTP {response.status_code}")
             return None
 
         uploaded = json.loads(response.text)
@@ -278,6 +298,7 @@ class Immich:
             previous is not None and previous.own_upload and previous.asset_id == asset_id)
         self.record.upsert(file, asset_id, checksum, own_upload=own_upload, root=self.__root_for(file))
         self.__add_asset_to_album(asset_id, self.__album_name_for(stats.st_mtime))
+        self.status.upload_finished(file)
         return asset_id, status
 
     def __copy_asset_metadata(self, source_id, target_id):
@@ -356,11 +377,21 @@ class Immich:
         if json_body:
             headers['Content-Type'] = 'application/json'
         try:
-            return with_retries(lambda: requests.request(
+            response = with_retries(lambda: requests.request(
                 method, self.__immichHost + path, headers=headers, data=data, params=params))
+            self.__note_response(response)
+            return response
         except requests.exceptions.RequestException as e:
             log.warning(f"{method} {path} failed: {e}")
+            self.status.server_unreachable()
             return None
+
+    def __note_response(self, response):
+        """Any answer below 500 proves the server is reachable; a 5xx after the retries counts as not."""
+        if response.status_code >= 500:
+            self.status.server_unreachable()
+        else:
+            self.status.server_reachable()
 
     def __root_for(self, path):
         """The watched root that contains path (the deepest one if roots are nested), or None."""
