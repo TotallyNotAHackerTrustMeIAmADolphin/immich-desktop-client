@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 import os
 import sys
@@ -11,6 +12,7 @@ from pystray import Icon as icon, Menu as menu, MenuItem as item
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+import applog
 import autostart
 from gui_runner import GuiRunner
 from single_instance import acquire
@@ -19,14 +21,16 @@ from config import (default_config_dir, existing_directories, is_placeholder_con
 from immich import (Immich, InvalidServerResponseError, ServerUnreachableError, UnsupportedServerError,
                     is_media_file)
 
+log = logging.getLogger(__name__)
+
 
 def on_clicked(icon, item):
     global state
     state = not item.checked
     if state is True:
-        print("starting synchronisation")
+        log.info("starting synchronisation")
     else:
-        print("ending synchronisation")
+        log.info("ending synchronisation")
 
 
 def get_extensions_for_type():
@@ -46,45 +50,49 @@ class MyHandler(FileSystemEventHandler):
     def on_created(self, event):
         global state
         if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
-            print(f"File {event.src_path} has been created!")
+            log.info(f"File {event.src_path} has been created!")
             try:
                 api.created(event.src_path)
             except Exception as e:  # an escaping exception would silently end the watcher thread
-                print(f"error handling creation of {event.src_path}: {e!r}")
+                log.error(f"error handling creation of {event.src_path}: {e!r}")
 
     def on_deleted(self, event):
         global state
         if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
-            print(f"File {event.src_path} has been deleted!")
+            log.info(f"File {event.src_path} has been deleted!")
             try:
                 api.delete(event.src_path)
             except Exception as e:
-                print(f"error handling deletion of {event.src_path}: {e!r}")
+                log.error(f"error handling deletion of {event.src_path}: {e!r}")
 
     def on_moved(self, event):
         global state
         if (state and not event.is_directory and is_media_file(event.src_path, media_file_extensions)
                 and is_media_file(event.dest_path, media_file_extensions)):
-            print(f"File {event.src_path} has been moved to {event.dest_path}!")
+            log.info(f"File {event.src_path} has been moved to {event.dest_path}!")
             try:
                 api.move(event.src_path, event.dest_path)
             except Exception as e:
-                print(f"error handling move of {event.src_path}: {e!r}")
+                log.error(f"error handling move of {event.src_path}: {e!r}")
 
     def on_modified(self, event):
         global state
         if state and not event.is_directory and is_media_file(event.src_path, media_file_extensions):
             sleep(1)  # let the writer finish before hashing
-            print(f"File {event.src_path} has been modified!")
+            log.info(f"File {event.src_path} has been modified!")
             try:
                 api.modify(event.src_path)
             except Exception as e:
-                print(f"error handling modification of {event.src_path}: {e!r}")
+                log.error(f"error handling modification of {event.src_path}: {e!r}")
 
 
 instance_lock = acquire()
 if instance_lock is None:
     sys.exit("Immich Desktop Client is already running.")
+
+# Everything from here on goes to the log file: the windowed exe has no console to print to.
+# Only the instance holding the lock logs, so two processes never rotate the same file.
+log_path = applog.setup_logging(default_config_dir())
 
 # Load Config
 config = load_config(default_config_dir())
@@ -96,7 +104,7 @@ if config is None or is_placeholder_config(config):
         if open_settings():
             config = load_config(default_config_dir())
     except Exception as e:  # no tkinter, or no display (headless session)
-        print(f"could not show the settings window: {e!r}")
+        log.warning(f"could not show the settings window: {e!r}")
     if config is None or is_placeholder_config(config):
         sys.exit(f"No usable configuration found. Edit {write_template_config(default_config_dir())} "
                  f"or start the app again to open the settings window.")
@@ -108,6 +116,7 @@ album_name = config["api"].get("album")
 if album_name is not None and str(album_name).startswith("<"):
     album_name = None  # still the template placeholder
 api_key = config["api"]["key"]
+applog.register_secret(api_key)
 directories_to_watch = config["watchdog"]["directories"]
 delete_options = config.get("delete") or {}
 
@@ -132,7 +141,7 @@ for attempt in range(1, STARTUP_ATTEMPTS + 1):
     except ServerUnreachableError as e:
         if attempt == STARTUP_ATTEMPTS:
             sys.exit(f"Could not reach the Immich server: {e}")
-        print(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
+        log.warning(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
         sleep(30)
 if api.test_connection() in (401, 403):
     sys.exit("The Immich server rejected the API key. Open the settings and check it.")
@@ -144,9 +153,9 @@ event_handler = MyHandler()
 for directory in existing_directories(directories_to_watch):
     try:
         observer.schedule(event_handler, directory, recursive=recursive)
-        print("watching directory: " + directory)
+        log.info("watching directory: " + directory)
     except OSError as e:
-        print(f"could not watch {directory}: {e!r}")
+        log.warning(f"could not watch {directory}: {e!r}")
 observer.start()
 
 def load_icon():
@@ -177,7 +186,11 @@ def open_config(tray_icon, tray_item):
     if hasattr(os, "startfile"):
         os.startfile(path)
     else:
-        print(f"config file: {path}")
+        log.info(f"config file: {path}")
+
+
+def open_log(tray_icon, tray_item):
+    applog.open_log(log_path)
 
 
 def open_settings_window(tray_icon, tray_item):
@@ -237,6 +250,7 @@ tray = icon('Immich Desktop Client', load_icon(), menu=menu(
          visible=sys.platform == 'win32' and getattr(sys, 'frozen', False)),
     item('Settings...', open_settings_window),
     item('Open config file', open_config),
+    item('Open log', open_log),
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
 ))

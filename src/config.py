@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "config.yaml"
 
@@ -36,7 +39,7 @@ def load_config(config_dir):
     if path.is_dir():
         aside = _unused_name(path)
         path.rename(aside)
-        print(f"{path} was a directory; moved it to {aside}")
+        log.warning(f"{path} was a directory; moved it to {aside}")
         return None
     if not path.exists():
         return None
@@ -58,7 +61,7 @@ def existing_directories(directories):
         if Path(directory).is_dir():
             reachable.append(directory)
         else:
-            print(f"watched root not reachable, not watching it this session: {directory}")
+            log.warning(f"watched root not reachable, not watching it this session: {directory}")
     return reachable
 
 

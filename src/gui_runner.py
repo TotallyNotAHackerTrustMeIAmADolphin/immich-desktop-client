@@ -1,5 +1,8 @@
+import logging
 import queue
 import threading
+
+log = logging.getLogger(__name__)
 
 
 class GuiRunner:
@@ -49,7 +52,7 @@ class GuiRunner:
         try:
             task()
         except Exception as e:  # a broken window must not take the whole app down
-            print(f"GUI task failed: {e!r}")
+            log.error(f"GUI task failed: {e!r}")
         finally:
             if name is not None:
                 with self.__lock:
