@@ -44,7 +44,8 @@ def open_progress(status, should_close=lambda: False):
 
     window = tkinter.Tk()
     window.title(TITLE)
-    window.attributes('-topmost', True)
+    window.attributes('-topmost', True)  # raise it once so it opens in front ...
+    window.after(300, lambda: window.attributes('-topmost', False))  # ... then behave like any other window
     window.minsize(480, 340)
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill="both", expand=True)
