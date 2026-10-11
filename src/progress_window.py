@@ -45,7 +45,7 @@ def open_progress(status, should_close=lambda: False):
     window = tkinter.Tk()
     window.title(TITLE)
     window.attributes('-topmost', True)
-    window.minsize(480, 280)
+    window.minsize(480, 340)
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill="both", expand=True)
 
@@ -54,12 +54,14 @@ def open_progress(status, should_close=lambda: False):
     ttk.Label(frame, textvariable=headline, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
     bar = ttk.Progressbar(frame, length=440, maximum=100)  # step() moves by 1, so 100 gives a smooth sweep
     bar.pack(fill="x", pady=8)
-    ttk.Label(frame, textvariable=current, wraplength=440).pack(anchor="w")
-    ttk.Label(frame, text="Failed items (the app retries them with \"Retry failed items\" in the tray menu):").pack(
-        anchor="w", pady=(10, 2))
+    # packed first so the list can never push it out of the window
+    ttk.Button(frame, text="Close", command=window.destroy).pack(side="bottom", anchor="e", pady=(10, 0))
+    current_label = ttk.Label(frame, textvariable=current, wraplength=440)
+    failed_label = ttk.Label(
+        frame, text="Failed items (retry them with \"Retry failed items\" in the tray menu):")
+    failed_label.pack(anchor="w", pady=(10, 2))
     failures = tkinter.Listbox(frame, height=6)
     failures.pack(fill="both", expand=True)
-    ttk.Button(frame, text="Close", command=window.destroy).pack(anchor="e", pady=(10, 0))
 
     state = {"mode": None}
 
@@ -71,6 +73,10 @@ def open_progress(status, should_close=lambda: False):
         view = view_model(snapshot)
         headline.set(view.headline)
         current.set(view.current_file)
+        if view.current_file and not current_label.winfo_ismapped():
+            current_label.pack(anchor="w", before=failed_label)
+        elif not view.current_file and current_label.winfo_ismapped():
+            current_label.pack_forget()  # no empty line while there is no file
         if view.mode != state["mode"]:
             bar.stop()
             if view.mode == "indeterminate":
