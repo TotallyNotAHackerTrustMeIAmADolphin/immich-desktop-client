@@ -166,6 +166,14 @@ def open_config(tray_icon, tray_item):
         log.info(f"config file: {path}")
 
 
+def show_progress_window(tray_icon, tray_item):
+    def show():
+        from progress_window import open_progress
+        open_progress(status, should_close=lambda: not runner.running)
+
+    runner.submit_once("progress", show)
+
+
 def open_log(tray_icon, tray_item):
     applog.open_log(log_path)
 
@@ -241,6 +249,7 @@ def quit_app(tray_icon, tray_item):
 # a `checked` callable
 tray = icon('Immich Desktop Client', load_icon(), menu=menu(
     item(lambda item: status.snapshot().text, lambda tray_icon, tray_item: None, enabled=False),  # status line
+    item('Show progress...', show_progress_window),
     menu.SEPARATOR,
     item(
         'Sync directories to Immich',
