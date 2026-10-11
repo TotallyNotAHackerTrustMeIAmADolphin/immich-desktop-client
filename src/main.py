@@ -178,6 +178,24 @@ def open_settings_window(tray_icon, tray_item):
     runner.submit_once("settings", show)
 
 
+def retry_failed_items(tray_icon, tray_item):
+    if api is None:
+        return
+
+    def work():  # a whole catch-up scan: off the GUI thread so windows and the tray stay responsive
+        try:
+            api.retry_failed(media_file_extensions)
+        except Exception as e:
+            log.error(f"retry of the failed items did not finish: {e!r}")
+
+    threading.Thread(target=work, daemon=True, name="retry-failed").start()
+
+
+def can_retry(tray_item):
+    snapshot = status.snapshot()
+    return api is not None and snapshot.failed > 0 and not snapshot.scanning
+
+
 def delete_all_uploads(tray_icon, tray_item):
     def show_result(trashed):
         from tkinter import messagebox
@@ -233,6 +251,7 @@ tray = icon('Immich Desktop Client', load_icon(), menu=menu(
     item('Settings...', open_settings_window),
     item('Open config file', open_config),
     item('Open log', open_log),
+    item('Retry failed items', retry_failed_items, enabled=can_retry),
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
 ))

@@ -119,6 +119,17 @@ class Immich:
         finally:
             self.status.scan_finished()
 
+    def retry_failed(self, media_file_extensions):
+        """Run the catch-up scan again: it is idempotent and picks up everything that failed before.
+
+        Returns False, doing nothing, while a scan is already running or before the first one.
+        """
+        if not self.__roots or self.status.snapshot().scanning:
+            return False
+        self.status.clear_failures()
+        self.upload_all_images(self.__roots, media_file_extensions)
+        return True
+
     def __catch_up(self, media_file_extensions):
         log.info("catch up with files already in the upload record")
         empty_roots = set()
