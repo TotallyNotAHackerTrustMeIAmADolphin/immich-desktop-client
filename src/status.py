@@ -34,6 +34,7 @@ class Snapshot:
     roots_skipped: int = 0
     current_file: str = None
     failures: list = field(default_factory=list)  # (path, reason), the most recent MAX_LISTED_FAILURES
+    scanning: bool = False
     scans_finished: int = 0  # the catch-up scans completed so far, with what the latest one did:
     scan_uploaded: int = 0
     scan_failed: int = 0
@@ -107,6 +108,12 @@ class Status:
             self.__failures.pop(path, None)
             self.__failures[path] = reason  # re-insert: the most recent failure is last
             self.__reset_batch_if_complete()
+        self.__changed()
+
+    def clear_failures(self):
+        """Forget the listed failures; a retry puts back whatever fails again."""
+        with self.__lock:
+            self.__failures.clear()
         self.__changed()
 
     def root_skipped(self, root):
@@ -192,5 +199,5 @@ class Status:
         return Snapshot(state=state, text=text, uploaded=self.__uploaded, done=self.__done, total=self.__total,
                         failed=len(self.__failures), roots_skipped=len(self.__skipped_roots),
                         current_file=self.__current, failures=failures,
-                        scans_finished=self.__scans_finished, scan_uploaded=self.__scan_uploaded,
+                        scanning=self.__scanning, scans_finished=self.__scans_finished, scan_uploaded=self.__scan_uploaded,
                         scan_failed=self.__scan_failed)
