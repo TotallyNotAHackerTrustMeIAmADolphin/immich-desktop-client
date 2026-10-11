@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 def on_clicked(icon, item):
     global state
     state = not item.checked
+    api.status.set_paused(not state)
     if state is True:
         log.info("starting synchronisation")
     else:
