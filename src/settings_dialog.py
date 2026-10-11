@@ -24,7 +24,7 @@ def open_settings(on_saved=None, config_dir=None):
     key = tkinter.StringVar(value=form["key"])
     album = tkinter.StringVar(value=form["album"])
     flags = {name: tkinter.BooleanVar(value=form[name])
-             for name in ("album_by_year", "recursive", "live_delete", "catch_up_delete")}
+             for name in ("album_by_year", "recursive", "live_delete", "catch_up_delete", "notifications")}
 
     def add_row(row, label, variable, show=None):
         ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
@@ -58,6 +58,7 @@ def open_settings(on_saved=None, config_dir=None):
         ("album_by_year", "File uploads into one album per year"),
         ("live_delete", "Move the upload to the Immich trash when I delete a file"),
         ("catch_up_delete", "At startup, trash uploads whose file is gone (only when the folder is reachable)"),
+        ("notifications", "Show a notification when the server is unreachable or a catch-up had failures"),
     )
     for row, (name, label) in enumerate(checkboxes, start=4):
         ttk.Checkbutton(frame, text=label, variable=flags[name]).grid(row=row, column=0, columnspan=3, sticky="w")
@@ -81,7 +82,7 @@ def open_settings(on_saved=None, config_dir=None):
         window.destroy()
 
     actions = ttk.Frame(frame)
-    actions.grid(row=8, column=0, columnspan=3, sticky="e", pady=(10, 0))
+    actions.grid(row=9, column=0, columnspan=3, sticky="e", pady=(10, 0))
     ttk.Button(actions, text="Cancel", command=window.destroy).pack(side="right", padx=4)
     ttk.Button(actions, text="Save", command=save).pack(side="right")
 

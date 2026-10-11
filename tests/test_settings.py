@@ -13,6 +13,7 @@ FORM = {
     "directories": ["/pics", "/shots"],
     "live_delete": True,
     "catch_up_delete": False,
+    "notifications": False,
 }
 
 
@@ -26,6 +27,7 @@ def test_form_converts_to_the_config_layout_and_back():
     assert config["api"] == {"url": "https://immich.example/api", "key": "secret", "album_by_year": True}
     assert config["watchdog"] == {"recursive": False, "directories": ["/pics", "/shots"]}
     assert config["delete"] == {"live": True, "catch_up": False}
+    assert config["notifications"] is False
     assert settings.form_from_config(config) == {**FORM}
 
 
@@ -90,3 +92,11 @@ def test_wrong_url_is_reported_as_such_not_as_an_old_server():
 
     errors, _ = settings.validate_form(FORM, check_server=wrong_url)
     assert errors and "/api" in errors[0] and "3.0.0" not in errors[0]
+
+
+def test_notifications_default_to_on_for_a_config_that_predates_the_option():
+    config = settings.config_from_form({k: v for k, v in FORM.items() if k != "notifications"})
+
+    assert config["notifications"] is True
+    assert settings.form_from_config({"api": {"url": "u", "key": "k"}, "watchdog": {"directories": ["/p"]}})[
+        "notifications"] is True
