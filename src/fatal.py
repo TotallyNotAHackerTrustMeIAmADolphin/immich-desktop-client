@@ -20,15 +20,20 @@ def _show_dialog(message):
         root.destroy()
 
 
-def die(message, show=_show_dialog):
-    """Stop the app with a reason the user can actually see.
-
-    The windowed exe has no console, so a bare sys.exit(message) would make it vanish without a word.
-    """
+def announce(message, show=_show_dialog):
+    """Log a fatal error and show it in a window (where there is a display); does not exit."""
     log.error(message)
     try:
         if not os.environ.get(NO_DIALOGS_ENV):
             show(message)
     except Exception as e:  # no tkinter or no display (headless session): the log still has the reason
         log.warning(f"could not show the error window: {e!r}")
+
+
+def die(message, show=_show_dialog):
+    """Stop the app with a reason the user can actually see.
+
+    The windowed exe has no console, so a bare sys.exit(message) would make it vanish without a word.
+    """
+    announce(message, show)
     raise SystemExit(1)
