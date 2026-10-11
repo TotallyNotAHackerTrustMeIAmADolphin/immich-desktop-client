@@ -14,8 +14,9 @@ from watchdog.observers import Observer
 
 import applog
 import autostart
-from fatal import die
+from fatal import announce, die
 from gui_runner import GuiRunner
+from status import Status
 from single_instance import acquire
 from config import (default_config_dir, existing_directories, is_placeholder_config, load_config,
                     write_template_config)
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 def on_clicked(icon, item):
     global state
     state = not item.checked
-    api.status.set_paused(not state)
+    status.set_paused(not state)
     if state is True:
         log.info("starting synchronisation")
     else:
@@ -126,39 +127,11 @@ state = True
 
 recursive = config["watchdog"].get("recursive", True)
 
-# at login the network is often not up yet, so keep trying for a while before giving up
-STARTUP_ATTEMPTS = 20
-for attempt in range(1, STARTUP_ATTEMPTS + 1):
-    try:
-        api = Immich(immich_host, api_key, album_name,
-                     live_delete=delete_options.get("live", False),
-                     catch_up_delete=delete_options.get("catch_up", False),
-                     recursive=recursive,
-                     album_by_year=config["api"].get("album_by_year", False))
-        break
-    except UnsupportedServerError as e:
-        die(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
-    except InvalidServerResponseError as e:
-        die(f"Refusing to start: {e}")
-    except ServerUnreachableError as e:
-        if attempt == STARTUP_ATTEMPTS:
-            die(f"Could not reach the Immich server: {e}")
-        log.warning(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
-        sleep(30)
-if api.test_connection() in (401, 403):
-    die("The Immich server rejected the API key. Open the settings and check it.")
-api.upload_all_images(directories_to_watch, media_file_extensions)
-
-# Create observer and event handler
+status = Status()
+api = None  # connected by startup() once the tray is up, so progress is visible from the first second
 observer = Observer()
 event_handler = MyHandler()
-for directory in existing_directories(directories_to_watch):
-    try:
-        observer.schedule(event_handler, directory, recursive=recursive)
-        log.info("watching directory: " + directory)
-    except OSError as e:
-        log.warning(f"could not watch {directory}: {e!r}")
-observer.start()
+exit_code = 0
 
 def load_icon():
     try:
@@ -214,6 +187,9 @@ def delete_all_uploads(tray_icon, tray_item):
         runner.submit(lambda: show_result(trashed))
 
     def confirm():
+        if api is None:
+            log.info("delete all uploads ignored: still connecting to the server")
+            return
         from tkinter import messagebox
         with hidden_root() as root:
             confirmed = messagebox.askyesno(
@@ -244,6 +220,8 @@ def quit_app(tray_icon, tray_item):
 # Update the state in `on_clicked` and return the new state in
 # a `checked` callable
 tray = icon('Immich Desktop Client', load_icon(), menu=menu(
+    item(lambda item: status.snapshot().text, lambda tray_icon, tray_item: None, enabled=False),  # status line
+    menu.SEPARATOR,
     item(
         'Sync directories to Immich',
         on_clicked,
@@ -256,9 +234,83 @@ tray = icon('Immich Desktop Client', load_icon(), menu=menu(
     item('Move all uploads to Immich trash...', delete_all_uploads),
     item('Quit', quit_app),
 ))
+
+
+def show_status(snapshot):
+    """Tray tooltip and status line follow the status (best effort: Status logs a failing listener)."""
+    tray.title = f"Immich Desktop Client: {snapshot.text}"[:127]  # the Windows tooltip limit
+    tray.update_menu()
+
+
+status.subscribe(show_status)
+
+
+def fail_startup(message):
+    """A fatal error on the startup thread: show it on the GUI thread, then quit with exit code 1."""
+    global exit_code
+    exit_code = 1
+    status.refused(message)
+
+    def show_and_quit():
+        try:
+            announce(message)
+        finally:
+            quit_app(tray, None)
+
+    runner.submit(show_and_quit)
+
+
+def startup():
+    """Connect to the server, catch up, then watch. Runs off the main thread so the tray is up meanwhile."""
+    global api
+    try:
+        # at login the network is often not up yet, so keep trying for a while before giving up
+        STARTUP_ATTEMPTS = 20
+        for attempt in range(1, STARTUP_ATTEMPTS + 1):
+            try:
+                api = Immich(immich_host, api_key, album_name,
+                             live_delete=delete_options.get("live", False),
+                             catch_up_delete=delete_options.get("catch_up", False),
+                             recursive=recursive,
+                             album_by_year=config["api"].get("album_by_year", False),
+                             status=status)
+                break
+            except UnsupportedServerError as e:
+                return fail_startup(f"Refusing to start: {e}. Immich 3.0.0 or newer is required.")
+            except InvalidServerResponseError as e:
+                return fail_startup(f"Refusing to start: {e}")
+            except ServerUnreachableError as e:
+                if attempt == STARTUP_ATTEMPTS:
+                    return fail_startup(f"Could not reach the Immich server: {e}")
+                status.server_unreachable()
+                log.warning(f"Immich server not reachable yet ({e}); retrying in 30 seconds")
+                sleep(30)
+        status.server_reachable()
+        if api.test_connection() in (401, 403):
+            return fail_startup("The Immich server rejected the API key. Open the settings and check it.")
+        api.upload_all_images(directories_to_watch, media_file_extensions)
+
+        for directory in existing_directories(directories_to_watch):
+            try:
+                observer.schedule(event_handler, directory, recursive=recursive)
+                log.info("watching directory: " + directory)
+            except OSError as e:
+                log.warning(f"could not watch {directory}: {e!r}")
+        observer.start()
+    except Exception as e:
+        log.exception("startup failed")
+        fail_startup(f"The app could not start: {e!r}")
+
+
+def begin(tray_icon):
+    tray_icon.visible = True
+    threading.Thread(target=startup, daemon=True, name="startup").start()
+
+
 if sys.platform == "darwin":
-    tray.run()
+    tray.run(setup=begin)
 else:
-    tray.run_detached()
+    tray.run_detached(setup=begin)
     runner.run()  # blocks the main thread, executing GUI tasks, until Quit
 instance_lock.release()
+sys.exit(exit_code)

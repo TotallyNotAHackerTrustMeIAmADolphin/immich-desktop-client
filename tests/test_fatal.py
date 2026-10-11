@@ -36,3 +36,13 @@ def test_dialogs_can_be_switched_off_for_unattended_runs(monkeypatch):
         fatal.die("boom", show=shown.append)
 
     assert shown == []
+
+
+def test_announce_logs_and_shows_but_does_not_exit(caplog):
+    shown = []
+
+    with caplog.at_level(logging.INFO):
+        fatal.announce("heads up", show=shown.append)
+
+    assert shown == ["heads up"]
+    assert "heads up" in caplog.text
