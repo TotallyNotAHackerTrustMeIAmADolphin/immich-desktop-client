@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os.path
 import socket
 from datetime import datetime
@@ -9,6 +10,8 @@ from time import sleep
 import requests
 
 from record import UploadRecord, migrate_legacy_shelve
+
+log = logging.getLogger(__name__)
 
 MINIMUM_SERVER_VERSION = (3, 0, 0)
 OWNERSHIP_HINT_KEY = "immich-desktop-client"
@@ -109,7 +112,7 @@ class Immich:
     def upload_all_images(self, directories, media_file_extensions):
         self.__roots = [os.path.normpath(directory) for directory in directories]
 
-        print("catch up with files already in the upload record")
+        log.info("catch up with files already in the upload record")
         empty_roots = set()
         for entry in self.record.entries():
             root = entry.root or self.__root_for(entry.path)
@@ -123,15 +126,15 @@ class Immich:
                 self.modify(entry.path)
             elif self.__catch_up_delete:
                 if root not in empty_roots and self.__looks_unmounted(root):
-                    print(f"watched root {root} is empty: not trashing anything for it, it may be an unmounted drive")
+                    log.warning(f"watched root {root} is empty: not trashing anything for it, it may be an unmounted drive")
                     empty_roots.add(root)
                 if root not in empty_roots:
                     self.__forget_missing(entry)
 
-        print("uploading new files")
+        log.info("uploading new files")
         for root in self.__roots:
             if not os.path.isdir(root):
-                print(f"skipping unreachable watched root {root}")
+                log.warning(f"skipping unreachable watched root {root}")
                 continue
             for file in self.__media_files(root, media_file_extensions):
                 if self.record.get(file) is None:
@@ -235,7 +238,7 @@ class Immich:
         try:
             stats = self.__get_file_stats(file)
         except FileNotFoundError:
-            print("could not create file")
+            log.warning(f"could not read {file}: it disappeared before it could be uploaded")
             return None
 
         checksum = self.__get_sha1(file)
@@ -261,15 +264,15 @@ class Immich:
         try:
             response = with_retries(post)
         except (requests.exceptions.RequestException, OSError) as e:
-            print(f"upload of {file} failed: {e}")
+            log.warning(f"upload of {file} failed: {e}")
             return None
         if not response.ok:
-            print(f"upload of {file} failed: {response.status_code} {response.text}")
+            log.warning(f"upload of {file} failed: {response.status_code} {response.text}")
             return None
 
         uploaded = json.loads(response.text)
         asset_id, status = uploaded['id'], uploaded['status']
-        print("status: " + status)
+        log.info(f"uploaded {file}: {status}")
         previous = self.record.get(file)
         own_upload = status == 'created' or (
             previous is not None and previous.own_upload and previous.asset_id == asset_id)
@@ -281,7 +284,7 @@ class Immich:
         payload = json.dumps({"sourceId": source_id, "targetId": target_id})
         response = self.__request("PUT", "/assets/copy", data=payload, json_body=True)
         if response is None or not response.ok:
-            print("could not carry albums/favorite over to the new asset; keeping the old asset")
+            log.warning("could not carry albums/favorite over to the new asset; keeping the old asset")
             return False
         return True
 
@@ -289,7 +292,7 @@ class Immich:
         """Move assets to the server's trash; True on success. Deliberately never sends force (see ADR 0001)."""
         response = self.__request("DELETE", "/assets", data=json.dumps({"ids": list(asset_ids)}), json_body=True)
         if response is None or not response.ok:
-            print(f"could not trash {asset_ids}")
+            log.warning(f"could not trash {asset_ids}")
             return False
         return True
 
@@ -314,7 +317,7 @@ class Immich:
         return None
 
     def __create_album(self, album_name):
-        print("no album found ... creating new one")
+        log.info("no album found ... creating new one")
         payload = json.dumps({
             "albumName": album_name,
             "description": "The Immich Desktop Client puts all images from " + self.album_name + " in this folder",
@@ -322,19 +325,19 @@ class Immich:
         response = self.__request("POST", "/albums", data=payload, json_body=True)
         if response is None or not response.ok:
             raise ServerUnreachableError("could not create album")
-        print("Successfully created album " + str(response.json()))
+        log.info("Successfully created album " + str(response.json()))
         return response.json()['id']
 
     def __add_asset_to_album(self, asset_id, album_name):
         try:
             album_id = self.__album_id_for(album_name)
         except ServerUnreachableError as e:
-            print(f"could not file asset into album {album_name}: {e}")
+            log.warning(f"could not file asset into album {album_name}: {e}")
             return
         response = self.__request("PUT", f"/albums/{album_id}/assets", data=json.dumps({"ids": [str(asset_id)]}),
                                   json_body=True)
         if response is None or not response.ok:
-            print(f"could not add asset to album {album_name}")
+            log.warning(f"could not add asset to album {album_name}")
 
     def check_server_supported(self):
         check_server_supported(self.__immichHost, self.__apiKey)
@@ -342,7 +345,7 @@ class Immich:
     def test_connection(self):
         response = self.__request("POST", "/auth/validateToken")
         if response is not None:
-            print(response.json())
+            log.info(f"API key check answered {response.status_code}")
             return response.status_code
 
     # ---- plumbing -------------------------------------------------------------------------------------------
@@ -356,7 +359,7 @@ class Immich:
             return with_retries(lambda: requests.request(
                 method, self.__immichHost + path, headers=headers, data=data, params=params))
         except requests.exceptions.RequestException as e:
-            print(f"{method} {path} failed: {e}")
+            log.warning(f"{method} {path} failed: {e}")
             return None
 
     def __root_for(self, path):
@@ -379,7 +382,7 @@ class Immich:
                     # noinspection PyTypeChecker
                     return hashlib.file_digest(f, 'sha1').hexdigest()
             except Exception as e:
-                print(e)
+                log.warning(f"could not read {file} for hashing: {e!r}")
                 sleep(0.5)
 
     @staticmethod
@@ -391,7 +394,7 @@ class Immich:
             except FileNotFoundError:
                 sleep(0.5)
         else:
-            print("Error: could not get file stats since could not find file")
+            log.warning(f"could not get file stats of {file}: it could not be found")
             raise FileNotFoundError
 
     @staticmethod

@@ -99,3 +99,16 @@ def test_reupload_resolving_to_the_same_asset_keeps_own_upload_status(client, ap
     client.created(str(photo))  # e.g. a modified event racing the created event
 
     assert client.record.get(str(photo)).own_upload is True
+
+
+def test_failed_upload_is_logged_as_a_warning_with_path_and_reason(client, api, tmp_path, caplog):
+    api.upload_error = (500, {"message": "boom"})
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"jpeg-bytes")
+
+    with caplog.at_level("INFO"):
+        client.created(str(photo))
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert str(photo) in warnings[0].getMessage() and "500" in warnings[0].getMessage()
