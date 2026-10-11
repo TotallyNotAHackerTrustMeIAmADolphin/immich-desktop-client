@@ -110,8 +110,14 @@ def start_docker_server(workdir):
     for name, target in (("docker-compose.yml", "docker-compose.yml"), ("example.env", ".env")):
         (workdir / target).write_bytes(requests.get(COMPOSE_URL.format(name), timeout=60).content)
     env_file = workdir / ".env"
-    env_file.write_text("\n".join("IMMICH_VERSION=v3.1.0" if l.startswith("IMMICH_VERSION=") else l
-                                  for l in env_file.read_text().splitlines()))
+    # Postgres on a Windows bind mount dies with "PANIC: could not write to file pg_wal/xlogtemp: Interrupted
+    # system call" (Docker Desktop on NTFS), which takes Immich down mid-test: keep the data in a named volume.
+    compose = workdir / "docker-compose.yml"
+    compose.write_text(compose.read_text().replace("\nvolumes:\n  model-cache:", "\nvolumes:\n  model-cache:\n  pgdata:"))
+    env_file.write_text("\n".join(
+        "IMMICH_VERSION=v3.1.0" if l.startswith("IMMICH_VERSION=")
+        else "DB_DATA_LOCATION=pgdata" if l.startswith("DB_DATA_LOCATION=") else l
+        for l in env_file.read_text().splitlines()))
     subprocess.run(["docker", "compose", "up", "-d"], cwd=workdir, env=env, check=True)
     url = "http://localhost:2283/api"
     if not wait_for(lambda: _ok(url + "/server/version"), timeout=240, interval=3):
