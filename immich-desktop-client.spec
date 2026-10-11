@@ -31,7 +31,7 @@ a = Analysis(
     ['src\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('resources/icon.ico', 'resources')],  # tray fallback icon, see src/trayicon.py
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
