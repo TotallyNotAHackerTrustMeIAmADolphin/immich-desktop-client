@@ -52,7 +52,7 @@ def open_progress(status, should_close=lambda: False):
     headline = tkinter.StringVar()
     current = tkinter.StringVar()
     ttk.Label(frame, textvariable=headline, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
-    bar = ttk.Progressbar(frame, length=440, maximum=1.0)
+    bar = ttk.Progressbar(frame, length=440, maximum=100)  # step() moves by 1, so 100 gives a smooth sweep
     bar.pack(fill="x", pady=8)
     ttk.Label(frame, textvariable=current, wraplength=440).pack(anchor="w")
     ttk.Label(frame, text="Failed items (the app retries them with \"Retry failed items\" in the tray menu):").pack(
@@ -75,12 +75,12 @@ def open_progress(status, should_close=lambda: False):
             bar.stop()
             if view.mode == "indeterminate":
                 bar.configure(mode="indeterminate")
-                bar.start(40)
+                bar.start(20)
             else:
                 bar.configure(mode="determinate")
             state["mode"] = view.mode
         if view.mode != "indeterminate":
-            bar["value"] = view.fraction
+            bar["value"] = view.fraction * 100
         if list(failures.get(0, tkinter.END)) != view.failures:
             failures.delete(0, tkinter.END)
             for row in view.failures:
