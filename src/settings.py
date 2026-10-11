@@ -17,6 +17,7 @@ def config_from_form(form):
         "api": api,
         "watchdog": {"recursive": bool(form.get("recursive", True)), "directories": list(form["directories"])},
         "delete": {"live": bool(form.get("live_delete")), "catch_up": bool(form.get("catch_up_delete"))},
+        "notifications": bool(form.get("notifications", True)),
     }
 
 
@@ -36,6 +37,7 @@ def form_from_config(config):
         "directories": list(watchdog.get("directories") or []),
         "live_delete": bool(delete.get("live", False)),
         "catch_up_delete": bool(delete.get("catch_up", False)),
+        "notifications": bool(config.get("notifications", True)),
     }
 
 

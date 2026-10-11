@@ -34,6 +34,9 @@ class Snapshot:
     roots_skipped: int = 0
     current_file: str = None
     failures: list = field(default_factory=list)  # (path, reason), the most recent MAX_LISTED_FAILURES
+    scans_finished: int = 0  # the catch-up scans completed so far, with what the latest one did:
+    scan_uploaded: int = 0
+    scan_failed: int = 0
 
 
 class Status:
@@ -51,6 +54,8 @@ class Status:
         self.__current = None
         self.__failures = {}  # path -> reason, insertion ordered
         self.__skipped_roots = set()
+        self.__scans_finished = 0
+        self.__scan_uploaded = self.__scan_failed = 0  # of the scan in progress, then of the last one
 
     # ---- reporting (called by the worker threads) -------------------------------------------------------
 
@@ -58,11 +63,13 @@ class Status:
         with self.__lock:
             self.__scan_seen = self.__scanning = True
             self.__skipped_roots.clear()
+            self.__scan_uploaded = self.__scan_failed = 0
         self.__changed()
 
     def scan_finished(self):
         with self.__lock:
             self.__scanning = False
+            self.__scans_finished += 1
             self.__reset_batch_if_complete()
         self.__changed()
 
@@ -82,6 +89,8 @@ class Status:
     def upload_finished(self, path):
         with self.__lock:
             self.__uploaded += 1
+            if self.__scanning:
+                self.__scan_uploaded += 1
             self.__done += 1
             self.__failures.pop(path, None)
             self.__current = None
@@ -93,6 +102,8 @@ class Status:
             if self.__current == path:
                 self.__done += 1
                 self.__current = None
+            if self.__scanning:
+                self.__scan_failed += 1
             self.__failures.pop(path, None)
             self.__failures[path] = reason  # re-insert: the most recent failure is last
             self.__reset_batch_if_complete()
@@ -180,4 +191,6 @@ class Status:
         failures = list(self.__failures.items())[-MAX_LISTED_FAILURES:]
         return Snapshot(state=state, text=text, uploaded=self.__uploaded, done=self.__done, total=self.__total,
                         failed=len(self.__failures), roots_skipped=len(self.__skipped_roots),
-                        current_file=self.__current, failures=failures)
+                        current_file=self.__current, failures=failures,
+                        scans_finished=self.__scans_finished, scan_uploaded=self.__scan_uploaded,
+                        scan_failed=self.__scan_failed)

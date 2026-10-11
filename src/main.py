@@ -16,6 +16,7 @@ import applog
 import autostart
 from fatal import announce, die
 from gui_runner import GuiRunner
+from notifier import Notifier
 from status import Status
 from single_instance import acquire
 from config import (default_config_dir, existing_directories, is_placeholder_config, load_config,
@@ -122,6 +123,7 @@ api_key = config["api"]["key"]
 applog.register_secret(api_key)
 directories_to_watch = config["watchdog"]["directories"]
 delete_options = config.get("delete") or {}
+notifications_enabled = bool(config.get("notifications", True))  # changes apply after a restart
 
 state = True
 
@@ -243,6 +245,8 @@ def show_status(snapshot):
 
 
 status.subscribe(show_status)
+status.subscribe(Notifier(lambda title, message: tray.notify(message, title),
+                          enabled=lambda: notifications_enabled))
 
 
 def fail_startup(message):
