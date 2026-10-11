@@ -14,6 +14,7 @@ from watchdog.observers import Observer
 
 import applog
 import autostart
+import trayicon
 from fatal import announce, die
 from gui_runner import GuiRunner
 from notifier import Notifier
@@ -136,10 +137,13 @@ event_handler = MyHandler()
 exit_code = 0
 
 def load_icon():
-    try:
-        return Image.open(default_config_dir() / 'icon.ico')
-    except OSError:
-        return Image.new('RGB', (64, 64), (66, 80, 175))  # plain fallback when the icon file is missing
+    path = trayicon.resolve_icon_path(default_config_dir(), getattr(sys, '_MEIPASS', None), Path(__file__).resolve().parent)
+    if path is not None:
+        try:
+            return Image.open(path)
+        except OSError:
+            pass
+    return Image.new('RGB', (64, 64), (66, 80, 175))  # plain fallback when no icon file is found or readable
 
 
 # Tk windows only ever run on the main thread (see GuiRunner); tray callbacks just submit tasks.
