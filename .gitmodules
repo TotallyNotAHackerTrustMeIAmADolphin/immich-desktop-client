@@ -1,0 +1,3 @@
+[submodule "docs/playbook"]
+	path = docs/playbook
+	url = https://github.com/TotallyNotAHackerTrustMeIAmADolphin/agent-playbook.git
