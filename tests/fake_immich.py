@@ -34,6 +34,7 @@ class FakeImmichApi:
         self.copy_status = 204
         self.delete_status = 204
         self.deletes = []  # DELETE /assets payloads
+        self.delete_requests = []  # every DELETE of any path: (url, query params, parsed body); see test_delete_guard
         self.albums = []  # served by GET /albums
         self.created_albums = []
         self._counter = 0
@@ -46,6 +47,14 @@ class FakeImmichApi:
                 raise requests.exceptions.ConnectionError("flaky network")
             return FakeResponse({"message": "unavailable"}, outcome)
         return None
+
+    def __check_delete(self, url, params, data):
+        """ADR 0001: the only DELETE the client may send is DELETE <host>/assets, body exactly {"ids": [...]}."""
+        body = json.loads(data) if data else None
+        self.delete_requests.append((url, params, body))
+        assert url.endswith("/assets"), f"ADR 0001: DELETE to {url}; only /assets may be deleted"
+        assert not params, f"ADR 0001: DELETE /assets with query params {params!r}"
+        assert isinstance(body, dict) and set(body) == {"ids"},             f"ADR 0001: DELETE /assets body must be exactly {{'ids': [...]}}, got {body!r}"
 
     def post(self, url, headers=None, data=None, files=None, **kwargs):
         assert url.endswith("/assets")
@@ -72,6 +81,8 @@ class FakeImmichApi:
         if method == "PUT" and url.endswith("/assets/copy"):
             self.copies.append(json.loads(data))
             return FakeResponse({}, self.copy_status)
+        if method == "DELETE":
+            self.__check_delete(url, kwargs.get("params"), data)
         if method == "DELETE" and url.endswith("/assets"):
             self.deletes.append(json.loads(data))
             return FakeResponse({}, self.delete_status)
