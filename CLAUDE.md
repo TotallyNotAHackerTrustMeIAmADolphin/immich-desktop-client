@@ -71,8 +71,8 @@ to the full head sha.
 - P5: 1 to 3 builders on disjoint `Files:` lists; builder model in `.claude/settings.json`
   (`CLAUDE_CODE_SUBAGENT_MODEL`), reviewer `opus`; stacked PRs allowed (section 8, item 9).
 - P6: `python -m pytest -q` from the worktree (`pytest.ini`: `pythonpath = src`, `testpaths = tests`),
-  targeted `python -m pytest -q tests/test_<area>.py`. No linter yet; no guard test yet (first
-  candidate: nothing sends `force` to `DELETE /assets`, ADR 0001). Integration
+  targeted `python -m pytest -q tests/test_<area>.py`. No linter yet; the guard for ADR 0001 is
+  `tests/test_delete_guard.py` (nothing sends `force`, one DELETE call site). Integration
   (`IMMICH_TEST_URL=... python -m pytest tests/integration`) and smoke (`python tests/smoke/run_smoke.py`)
   are coordinator gates; smoke needs Docker Desktop with Postgres in a named volume, the installed app
   quit, and `IMMICH_DESKTOP_CLIENT_NO_DIALOGS=1`. One dependency environment (`pip install -r requirements-dev.txt`).

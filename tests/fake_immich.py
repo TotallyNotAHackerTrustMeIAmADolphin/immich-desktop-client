@@ -48,6 +48,14 @@ class FakeImmichApi:
             return FakeResponse({"message": "unavailable"}, outcome)
         return None
 
+    def __check_delete(self, url, params, data):
+        """ADR 0001: the only DELETE the client may send is DELETE <host>/assets, body exactly {"ids": [...]}."""
+        body = json.loads(data) if data else None
+        self.delete_requests.append((url, params, body))
+        assert url.endswith("/assets"), f"ADR 0001: DELETE to {url}; only /assets may be deleted"
+        assert not params, f"ADR 0001: DELETE /assets with query params {params!r}"
+        assert isinstance(body, dict) and set(body) == {"ids"},             f"ADR 0001: DELETE /assets body must be exactly {{'ids': [...]}}, got {body!r}"
+
     def post(self, url, headers=None, data=None, files=None, **kwargs):
         assert url.endswith("/assets")
         failure = self.__injected_failure()
@@ -74,7 +82,7 @@ class FakeImmichApi:
             self.copies.append(json.loads(data))
             return FakeResponse({}, self.copy_status)
         if method == "DELETE":
-            self.delete_requests.append((url, kwargs.get("params"), json.loads(data) if data else None))
+            self.__check_delete(url, kwargs.get("params"), data)
         if method == "DELETE" and url.endswith("/assets"):
             self.deletes.append(json.loads(data))
             return FakeResponse({}, self.delete_status)
