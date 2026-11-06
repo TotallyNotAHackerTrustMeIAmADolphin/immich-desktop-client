@@ -1,0 +1,7 @@
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+    "PLAYBOOK_BUILDER_CHECK": "python -m pytest -q",
+    "PLAYBOOK_REQUIRE_TICKET": "1"
+  }
+}
