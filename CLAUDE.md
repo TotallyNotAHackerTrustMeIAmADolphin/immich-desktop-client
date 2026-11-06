@@ -24,7 +24,7 @@ Next: map #1 "Not yet specified" (code signing, upstream follow-up, Guido coordi
 - P1: Human-only: logins and credentials (GitHub, Immich API key); publishing a release (the
   *Build release (draft)* workflow only creates a draft); anything that stops or replaces the
   owner's installed app or touches their real profile; the on-screen parts of release gate 3
-  (installer, tray menu, Tk dialogs, a real toast); code signing. Merging only when the owner says so (P15).
+  (installer, tray menu, Tk dialogs, a real toast); code signing. Merging is not human-only: the coordinator merges (P15).
 - P2: No agent touches by hand: the real profile `%USERPROFILE%\.Immich-desktop-client`
   (`config.yaml`, `record.sqlite`, `icon.ico`); the installed exe and autostart entry
   `C:\Users\ich\.immich-desktop-client\immich-desktop-client.exe`; the real Immich library; port 47862
@@ -58,7 +58,7 @@ P8:
 | Hand-back of a builder with a red check | plugin hook, `env.PLAYBOOK_BUILDER_CHECK` in `.claude/settings.json` (tooling) |
 | Dispatch without a ticket number | plugin hook, `env.PLAYBOOK_REQUIRE_TICKET` (tooling) |
 | Never force-delete, own-upload-only delete | tests; `tests/test_delete_guard.py` (tooling) |
-| Separate reviewer, merge on owner request, no secrets or personal config committed | instruction only |
+| Separate reviewer, merge only on CLEAN review + green CI + unchanged sha, no secrets or personal config committed | instruction only |
 | `master` integrity (no force-push, squash only) | instruction only; repo still allows merge/rebase merges |
 
 ## How to dispatch
@@ -102,8 +102,11 @@ depend on the reviewer's judgement.
 - P14: No alerts log or digest. At session start: the hand-off file, `gh issue list`, `gh pr list`.
   After a release: user reports and maxdorninger/immich-desktop-client#5; a regression means a patch release.
 - P15: Europe/Berlin; the session is the channel (no push). One question per message. Pending
-  decisions: "Not yet specified" in map #1. **Merging is not pre-authorised** (overrides the
-  default): merge only when the owner says so. Publishing, creating labels and closing the owner's app need a confirm.
+  decisions: "Not yet specified" in map #1. **The coordinator merges by itself** once the reviewer
+  says CLEAN on the head sha, CI is green and the sha is unchanged: squash with
+  `--match-head-commit`. Owner decision 2026-11-06: "warum soll ich dir merge sagen, das sollst du doch
+  selber machen". Docs-only PRs merge after the coordinator read the diff and CI is green. Publishing a
+  release and closing or replacing the owner's installed app still need a confirm.
 
 ## Agent skills
 
