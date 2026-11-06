@@ -107,12 +107,25 @@ depend on the reviewer's judgement.
 
 ## Agent skills
 
+### Issue tracker
+
 - P3: GitHub Issues via `gh` (`gh repo set-default TotallyNotAHackerTrustMeIAmADolphin/immich-desktop-client`
-  in a fresh clone, else it targets upstream). Roadmap: issue #1. Only `wontfix` exists of the default
-  labels; `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` and `docs/agents/` (via
-  `setup-matt-pocock-skills`) are still to create (outward-facing, owner says go).
-- P13: Glossary `CONTEXT.md` (not `GLOSSARY.md`: it exists and `domain-modeling` writes it), ADRs
-  `docs/adr/`, history `docs/HISTORY.md`, memory: the project's Claude Code memory directory.
+  in a fresh clone, else it targets upstream). Roadmap: issue #1. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`);
+the `wayfinder:*` labels of map #1 live beside them. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context. The glossary is `CONTEXT.md` (there is no `GLOSSARY.md`; read and extend `CONTEXT.md`).
+See `docs/agents/domain.md`.
+
+### Other answers
+
+- P13: Glossary `CONTEXT.md`, ADRs `docs/adr/`, history `docs/HISTORY.md`, memory: the project's
+  Claude Code memory directory.
 - P16: mattpocock-skills 1.3.1 (installed as dependency of the `playbook` plugin; the official
   marketplace's auto-update is to be switched off, owner step in `/plugin`). Builders load `pr` for
   PR bodies (with A6). `wayfinder` is in use for map #1 (human-only).
