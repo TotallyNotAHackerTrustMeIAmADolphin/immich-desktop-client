@@ -34,6 +34,7 @@ class FakeImmichApi:
         self.copy_status = 204
         self.delete_status = 204
         self.deletes = []  # DELETE /assets payloads
+        self.delete_requests = []  # every DELETE of any path: (url, query params, parsed body); see test_delete_guard
         self.albums = []  # served by GET /albums
         self.created_albums = []
         self._counter = 0
@@ -72,6 +73,8 @@ class FakeImmichApi:
         if method == "PUT" and url.endswith("/assets/copy"):
             self.copies.append(json.loads(data))
             return FakeResponse({}, self.copy_status)
+        if method == "DELETE":
+            self.delete_requests.append((url, kwargs.get("params"), json.loads(data) if data else None))
         if method == "DELETE" and url.endswith("/assets"):
             self.deletes.append(json.loads(data))
             return FakeResponse({}, self.delete_status)

@@ -57,7 +57,7 @@ P8:
 | Release refuses an existing tag | `release.yml` (tooling) |
 | Hand-back of a builder with a red check | plugin hook, `env.PLAYBOOK_BUILDER_CHECK` in `.claude/settings.json` (tooling) |
 | Dispatch without a ticket number | plugin hook, `env.PLAYBOOK_REQUIRE_TICKET` (tooling) |
-| Never force-delete, own-upload-only delete | tests; guard test still to add (tooling, partly) |
+| Never force-delete, own-upload-only delete | tests; `tests/test_delete_guard.py` (tooling) |
 | Separate reviewer, merge on owner request, no secrets or personal config committed | instruction only |
 | `master` integrity (no force-push, squash only) | instruction only; repo still allows merge/rebase merges |
 
